@@ -344,7 +344,7 @@ class ERDGenerator:
             for entity in erd_data["entities"]:
                 entity_name = entity["name"]
                 attributes = "|".join([attr["name"] for attr in entity["attributes"]])
-                dot_lines.append(f'    {entity_name} [label="{{{entity_name}}|{attributes}}}"];')
+                dot_lines.append('    {} [label="{{{}|{}}}"];'.format(entity_name, entity_name, attributes))
             
             # Add relationships
             for relationship in erd_data["relationships"]:
