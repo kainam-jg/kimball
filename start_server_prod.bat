@@ -1,5 +1,5 @@
 @echo off
-echo Starting KIMBALL v2.0 FastAPI Server...
+echo Starting KIMBALL v2.0 FastAPI Server (Production Mode)...
 echo.
 
 REM Check if Python is available
@@ -40,21 +40,27 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Start FastAPI server with development options
+REM Start FastAPI server in production mode
 echo.
-echo Starting FastAPI server with hot reloading...
-echo Server: http://localhost:8000
-echo API Docs: http://localhost:8000/docs
-echo Alternative Docs: http://localhost:8000/redoc
+echo ========================================
+echo KIMBALL v2.0 FastAPI Production Server
+echo ========================================
 echo.
-echo Development Features:
-echo - Hot reloading enabled (auto-restart on code changes)
-echo - Debug mode enabled
-echo - Detailed error messages
-echo - File watching for all Python files
+echo Server URLs:
+echo - Main Server: http://localhost:8000
+echo - API Documentation: http://localhost:8000/docs
+echo - Health Check: http://localhost:8000/health
+echo.
+echo Production Features:
+echo - Optimized for performance
+echo - No hot reloading (stable)
+echo - Production logging level
+echo - Error handling optimized
+echo - Ready for deployment
 echo.
 echo Press Ctrl+C to stop the server
+echo ========================================
 echo.
-uvicorn kimball.api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir kimball --log-level debug
+uvicorn kimball.api.main:app --host 0.0.0.0 --port 8000 --workers 4 --log-level info
 
 pause
