@@ -6,7 +6,12 @@ Test script to verify KIMBALL FastAPI server is working correctly
 import requests
 import time
 import sys
+import os
 from pathlib import Path
+
+# Add the project root to the Python path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
 
 def test_server():
     """Test the FastAPI server endpoints"""

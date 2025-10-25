@@ -1,8 +1,12 @@
 """
 KIMBALL Test Suite
 
-This module contains all tests for the KIMBALL platform.
-Organized by phase: acquire, discover, model, build
+This package contains all test modules for the KIMBALL platform:
+- test_acquire.py: Acquire phase testing
+- test_server.py: FastAPI server testing  
+- test_streamlit.py: Streamlit frontend testing
+- test_discover.py: Discover phase testing
 """
 
 __version__ = "1.0.0"
+__author__ = "KIMBALL Team"
