@@ -148,9 +148,5 @@ pipeline_*.json
 # Documentation files
 KIMBALL.txt
 
-# Test data (keep structure but not large files)
-tests/data/*.csv
-tests/data/*.json
-tests/data/*.xlsx
-tests/data/*.parquet
-!tests/data/README.md
+# Test files and data
+tests/
