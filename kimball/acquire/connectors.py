@@ -12,7 +12,10 @@ from typing import Dict, List, Any, Optional, Union, Iterator
 import json
 import requests
 import boto3
-from azure.storage.blob import BlobServiceClient
+try:
+    from azure.storage.blob import BlobServiceClient
+except ImportError:
+    BlobServiceClient = None
 from google.cloud import storage
 import pandas as pd
 import sqlalchemy
@@ -115,10 +118,18 @@ class DatabaseConnector(BaseConnector):
     def test_connection(self) -> bool:
         """Test database connection."""
         try:
+            # First ensure we're connected
+            if not self.connect():
+                return False
+                
             if self.db_type == "clickhouse":
                 result = self.connection.command("SELECT 1")
                 return result is not None
-            elif self.db_type == "postgresql":
+            elif self.db_type == "postgres":
+                with self.connection.connect() as conn:
+                    result = conn.execute(text("SELECT 1"))
+                    return result is not None
+            elif self.db_type == "mysql":
                 cursor = self.connection.cursor()
                 cursor.execute("SELECT 1")
                 result = cursor.fetchone()
@@ -205,13 +216,17 @@ class StorageConnector(BaseConnector):
         """Connect to storage."""
         try:
             if self.storage_type == "s3":
-                self.client = boto3.client(
-                    's3',
-                    aws_access_key_id=self.config.get("access_key"),
-                    aws_secret_access_key=self.config.get("secret_key"),
-                    region_name=self.config.get("region", "us-east-1")
-                )
+                # Use only access key and secret key (no session token)
+                connection_params = {
+                    'aws_access_key_id': self.config.get("access_key"),
+                    'aws_secret_access_key': self.config.get("secret_key"),
+                    'region_name': self.config.get("region", "us-east-1")
+                }
+                
+                self.client = boto3.client('s3', **connection_params)
             elif self.storage_type == "azure":
+                if BlobServiceClient is None:
+                    raise ImportError("azure-storage-blob package is required for Azure storage")
                 self.client = BlobServiceClient.from_connection_string(
                     self.credentials.get("connection_string")
                 )
@@ -237,8 +252,13 @@ class StorageConnector(BaseConnector):
     def test_connection(self) -> bool:
         """Test storage connection."""
         try:
+            # First ensure we're connected
+            if not self.connect():
+                return False
+                
             if self.storage_type == "s3":
-                self.client.head_bucket(Bucket=self.bucket)
+                bucket_name = self.config.get("bucket", self.bucket)
+                self.client.head_bucket(Bucket=bucket_name)
                 return True
             elif self.storage_type == "azure":
                 container_client = self.client.get_container_client(self.bucket)
@@ -258,7 +278,8 @@ class StorageConnector(BaseConnector):
         """Get storage schema (file listing)."""
         try:
             if self.storage_type == "s3":
-                response = self.client.list_objects_v2(Bucket=self.bucket)
+                bucket_name = self.config.get("bucket", self.bucket)
+                response = self.client.list_objects_v2(Bucket=bucket_name)
                 files = [obj["Key"] for obj in response.get("Contents", [])]
                 return {"files": files, "type": "s3"}
             elif self.storage_type == "azure":

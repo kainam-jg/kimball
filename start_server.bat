@@ -11,35 +11,6 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Check if virtual environment exists
-if not exist "venv" (
-    echo Creating virtual environment...
-    python -m venv venv
-    if errorlevel 1 (
-        echo ERROR: Failed to create virtual environment
-        pause
-        exit /b 1
-    )
-)
-
-REM Activate virtual environment
-echo Activating virtual environment...
-call venv\Scripts\activate.bat
-if errorlevel 1 (
-    echo ERROR: Failed to activate virtual environment
-    pause
-    exit /b 1
-)
-
-REM Install dependencies
-echo Installing dependencies...
-pip install -r requirements.txt
-if errorlevel 1 (
-    echo ERROR: Failed to install dependencies
-    pause
-    exit /b 1
-)
-
 REM Start FastAPI server with development options
 echo.
 echo Starting FastAPI server with hot reloading...
@@ -53,8 +24,22 @@ echo - Debug mode enabled
 echo - Detailed error messages
 echo - File watching for all Python files in 'kimball' and 'frontend'
 echo.
-echo Press Ctrl+C to stop the server
+echo Starting server in background...
+echo Use 'stop_server.bat' to stop the server
 echo.
-uvicorn kimball.api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir kimball --reload-dir frontend --log-level debug
+
+REM Start server in background (Windows equivalent of nohup)
+start /B uvicorn kimball.api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir kimball --reload-dir frontend --log-level debug
+
+echo FastAPI server started in background!
+echo.
+echo To check if server is running:
+echo   curl http://localhost:8000/health
+echo.
+echo To stop the server:
+echo   stop_server.bat
+echo.
+echo To view server logs, check the terminal window that opened
+echo.
 
 pause

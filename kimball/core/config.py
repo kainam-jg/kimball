@@ -104,3 +104,18 @@ class Config:
         except Exception as e:
             print(f"Error saving config: {e}")
             return False
+    
+    def get_config(self) -> Dict[str, Any]:
+        """Get the full configuration dictionary."""
+        return self.config
+    
+    def save_config(self, config: Dict[str, Any]) -> bool:
+        """Save a configuration dictionary to file."""
+        try:
+            with open(self.config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+            self.config = config  # Update internal config
+            return True
+        except Exception as e:
+            print(f"Error saving config: {e}")
+            return False

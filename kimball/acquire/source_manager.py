@@ -101,6 +101,39 @@ class DataSourceManager:
         
         return self.sources[source_name].test_connection()
     
+    def test_source_connection(self, source_name: str) -> bool:
+        """Test connection to a specific source without requiring it to be pre-connected."""
+        try:
+            if source_name not in self.config.get("data_sources", {}):
+                self.logger.error(f"Source '{source_name}' not found in configuration")
+                return False
+            
+            source_config = self.config["data_sources"][source_name]
+            source_type = source_config.get("type")
+            
+            # Create a temporary connector to test the connection
+            if source_type == "postgres":
+                connector = DatabaseConnector(source_config)
+            elif source_type == "s3":
+                connector = StorageConnector(source_config)
+            elif source_type == "api":
+                connector = APIConnector(source_config)
+            else:
+                self.logger.error(f"Unsupported source type: {source_type}")
+                return False
+            
+            # Test the connection
+            if connector.test_connection():
+                self.logger.info(f"Connection test successful for source: {source_name}")
+                return True
+            else:
+                self.logger.error(f"Connection test failed for source: {source_name}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error testing connection to source {source_name}: {e}")
+            return False
+    
     def get_source_schema(self, source_name: str) -> Dict[str, Any]:
         """Get schema information from a specific source."""
         if source_name not in self.sources:
@@ -252,3 +285,36 @@ class DataSourceManager:
         finally:
             # Disconnect from source
             self.disconnect_source(source_name)
+    
+    def test_source_connection(self, source_name: str) -> bool:
+        """Test connection to a specific source without requiring it to be pre-connected."""
+        try:
+            if source_name not in self.config.get("data_sources", {}):
+                self.logger.error(f"Source '{source_name}' not found in configuration")
+                return False
+            
+            source_config = self.config["data_sources"][source_name]
+            source_type = source_config.get("type")
+            
+            # Create a temporary connector to test the connection
+            if source_type == "postgres":
+                connector = DatabaseConnector(source_config)
+            elif source_type == "s3":
+                connector = StorageConnector(source_config)
+            elif source_type == "api":
+                connector = APIConnector(source_config)
+            else:
+                self.logger.error(f"Unsupported source type: {source_type}")
+                return False
+            
+            # Test the connection
+            if connector.test_connection():
+                self.logger.info(f"Connection test successful for source: {source_name}")
+                return True
+            else:
+                self.logger.error(f"Connection test failed for source: {source_name}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error testing connection to source {source_name}: {e}")
+            return False

@@ -62,6 +62,8 @@ def main():
     tests = [
         ("FastAPI Server Test", "tests/test_server.py"),
         ("Streamlit Frontend Test", "tests/test_streamlit.py"),
+        ("Data Sources Test", "tests/test_data_sources.py"),
+        ("S3 Connection Test", "tests/test_s3_connection.py"),
         ("Acquire Phase Test", "tests/test_acquire.py"),
         ("Discover Phase Test", "tests/test_discover.py")
     ]

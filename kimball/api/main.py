@@ -41,10 +41,10 @@ app.add_middleware(
 )
 
 # Include routers for each phase
-app.include_router(acquire_router, prefix="/api/v1/acquire", tags=["Acquire"])
-app.include_router(discover_router, prefix="/api/v1/discover", tags=["Discover"])
-app.include_router(model_router, prefix="/api/v1/model", tags=["Model"])
-app.include_router(build_router, prefix="/api/v1/build", tags=["Build"])
+app.include_router(acquire_router, tags=["Acquire"])
+app.include_router(discover_router, tags=["Discover"])
+app.include_router(model_router, tags=["Model"])
+app.include_router(build_router, tags=["Build"])
 
 @app.get("/")
 async def root():

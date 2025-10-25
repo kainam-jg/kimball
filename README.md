@@ -12,11 +12,12 @@ KIMBALL is a complete data warehouse automation platform that takes you from raw
 
 KIMBALL follows a four-phase approach:
 
-### 1. **Acquire Phase** 🔄
-- **Multi-source data connectors** (ERP, CRM, databases, APIs, cloud storage)
+### 1. **Acquire Phase** 🔄 ✅
+- **Multi-source data connectors** (PostgreSQL, S3, APIs, cloud storage)
 - **Automated data ingestion** into ClickHouse bronze layer
-- **Minimal transformation** to preserve data fidelity
-- **Real-time and batch processing** support
+- **Connection testing** and validation
+- **Data source configuration** via API and UI
+- **Simplified S3 configuration** (access key + secret key only)
 
 ### 2. **Discover Phase** 🔍
 - **Automated metadata discovery** and catalog generation
@@ -64,14 +65,21 @@ cp config.json.example config.json
 
 4. **Start the FastAPI backend**
 ```bash
-cd kimball
-python -m uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+# Windows
+start_server.bat
+
+# Or manually
+uvicorn kimball.api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 5. **Launch the Streamlit frontend** (for testing)
 ```bash
+# Windows
 cd frontend
-streamlit run streamlit_app.py
+start_streamlit.bat
+
+# Or manually
+streamlit run streamlit_app.py --server.port 8501
 ```
 
 ## 📁 Project Structure
@@ -180,6 +188,14 @@ streamlit run frontend/streamlit_app.py
 
 ## 🎯 Key Features
 
+### Data Acquisition ✅
+- **Multi-source connectors** for PostgreSQL, S3, and APIs
+- **Connection testing** and validation
+- **Data source configuration** via REST API
+- **Streamlit UI** for easy data source management
+- **Edit functionality** for updating data source configurations
+- **Simplified S3 setup** (access key + secret key only)
+
 ### Intelligent Discovery
 - **Automated metadata analysis** with 95%+ accuracy
 - **Data quality scoring** with actionable recommendations
@@ -205,6 +221,16 @@ Once the FastAPI backend is running, visit:
 - **ReDoc documentation**: http://localhost:8000/redoc
 
 ### Key Endpoints
+
+#### Acquire Phase ✅
+- `GET /api/v1/acquire/datasources` - List data sources
+- `POST /api/v1/acquire/datasources` - Create data source
+- `PUT /api/v1/acquire/datasources/{source_id}` - Update data source
+- `DELETE /api/v1/acquire/datasources/{source_id}` - Delete data source
+- `GET /api/v1/acquire/test/{source_id}` - Test connection
+- `POST /api/v1/acquire/connect/{source_id}` - Connect to source
+- `POST /api/v1/acquire/extract/{source_id}` - Extract data
+- `POST /api/v1/acquire/load/{source_id}` - Load to bronze layer
 
 #### Discover Phase
 - `POST /api/v1/discover/analyze` - Analyze schema
@@ -268,11 +294,15 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🚀 Roadmap
 
-### Phase 1 (Current)
-- ✅ Discover phase with enhanced metadata analysis
-- ✅ FastAPI backend with comprehensive APIs
-- ✅ Streamlit testing frontend
-- ✅ Data quality assessment
+### Phase 1 (Current) ✅
+- ✅ **Acquire phase** with multi-source connectors (PostgreSQL, S3)
+- ✅ **Data source configuration** via API and UI
+- ✅ **Connection testing** and validation
+- ✅ **Simplified S3 configuration** (no session tokens)
+- ✅ **FastAPI backend** with comprehensive APIs
+- ✅ **Streamlit testing frontend** with edit functionality
+- ✅ **Discover phase** with enhanced metadata analysis
+- ✅ **Data quality assessment**
 
 ### Phase 2 (Next)
 - 🔄 Model phase with ERD generation
