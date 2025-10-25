@@ -13,6 +13,12 @@ import json
 import requests
 from datetime import datetime
 import uuid
+import sqlalchemy
+from sqlalchemy import create_engine, text
+import boto3
+from botocore.exceptions import ClientError
+import os
+from pathlib import Path
 
 from ..core.logger import Logger
 
@@ -84,7 +90,7 @@ class DataExtractor:
         """Extract data from database source."""
         try:
             # Get database connection
-            connection = self._get_database_connection(source_id)
+            engine = self._get_database_connection(source_id, config)
             
             # Build extraction query
             query = config.get("query", "SELECT * FROM table_name")
@@ -101,23 +107,30 @@ class DataExtractor:
                 
                 while True:
                     batch_query = f"{query} LIMIT {batch_size} OFFSET {offset}"
-                    batch_data = connection.execute_query(batch_query)
+                    batch_df = pd.read_sql(batch_query, engine)
                     
-                    if not batch_data:
+                    if batch_df.empty:
                         break
                     
-                    all_data.extend(batch_data)
+                    all_data.append(batch_df)
                     offset += batch_size
                     
-                    if len(batch_data) < batch_size:
+                    if len(batch_df) < batch_size:
                         break
+                
+                # Combine all batches
+                if all_data:
+                    combined_df = pd.concat(all_data, ignore_index=True)
+                else:
+                    combined_df = pd.DataFrame()
             else:
-                all_data = connection.execute_query(query)
+                combined_df = pd.read_sql(query, engine)
             
             return {
-                "data": all_data,
-                "record_count": len(all_data),
-                "columns": list(all_data[0].keys()) if all_data else [],
+                "data": combined_df.to_dict('records') if not combined_df.empty else [],
+                "dataframe": combined_df,
+                "record_count": len(combined_df),
+                "columns": list(combined_df.columns) if not combined_df.empty else [],
                 "extraction_type": "database"
             }
             
@@ -187,27 +200,37 @@ class DataExtractor:
     def _extract_from_storage(self, source_id: str, config: Dict[str, Any], batch_size: int) -> Dict[str, Any]:
         """Extract data from storage source."""
         try:
-            storage_type = config.get("storage_type", "s3")
+            storage_type = config.get("type", "s3")
             bucket = config.get("bucket")
             file_pattern = config.get("file_pattern", "*.csv")
+            prefix = config.get("prefix", "")
             
             # Get storage client
-            client = self._get_storage_client(source_id)
+            client = self._get_storage_client(source_id, config)
             
             # List files matching pattern
-            files = self._list_storage_files(client, bucket, file_pattern, storage_type)
+            files = self._list_storage_files(client, bucket, file_pattern, storage_type, prefix)
             
-            all_data = []
+            all_dataframes = []
             
             # Process files
             for file_path in files:
-                file_data = self._extract_from_file(client, bucket, file_path, storage_type)
-                all_data.extend(file_data)
+                file_df = self._extract_from_file(client, bucket, file_path, storage_type)
+                if not file_df.empty:
+                    file_df['_source_file'] = file_path
+                    all_dataframes.append(file_df)
+            
+            # Combine all dataframes
+            if all_dataframes:
+                combined_df = pd.concat(all_dataframes, ignore_index=True)
+            else:
+                combined_df = pd.DataFrame()
             
             return {
-                "data": all_data,
-                "record_count": len(all_data),
-                "columns": list(all_data[0].keys()) if all_data else [],
+                "data": combined_df.to_dict('records') if not combined_df.empty else [],
+                "dataframe": combined_df,
+                "record_count": len(combined_df),
+                "columns": list(combined_df.columns) if not combined_df.empty else [],
                 "extraction_type": "storage",
                 "files_processed": len(files)
             }
@@ -216,27 +239,102 @@ class DataExtractor:
             self.logger.error(f"Storage extraction error: {str(e)}")
             raise
     
-    def _get_database_connection(self, source_id: str):
+    def _get_database_connection(self, source_id: str, config: Dict[str, Any]):
         """Get database connection by source ID."""
-        # In production, this would retrieve from connection pool
-        # For now, return a mock connection
-        return None
+        try:
+            db_type = config.get("type", "postgres")
+            
+            if db_type == "postgres":
+                connection_string = f"postgresql://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}"
+                return create_engine(connection_string)
+            elif db_type == "clickhouse":
+                import clickhouse_connect
+                return clickhouse_connect.get_client(
+                    host=config["host"],
+                    port=config["port"],
+                    username=config["user"],
+                    password=config["password"],
+                    database=config["database"]
+                )
+            else:
+                raise ValueError(f"Unsupported database type: {db_type}")
+                
+        except Exception as e:
+            self.logger.error(f"Database connection error: {e}")
+            raise
     
-    def _get_storage_client(self, source_id: str):
+    def _get_storage_client(self, source_id: str, config: Dict[str, Any]):
         """Get storage client by source ID."""
-        # In production, this would retrieve from connection pool
-        # For now, return a mock client
-        return None
+        try:
+            storage_type = config.get("type", "s3")
+            
+            if storage_type == "s3":
+                return boto3.client(
+                    's3',
+                    aws_access_key_id=config.get("access_key"),
+                    aws_secret_access_key=config.get("secret_key"),
+                    region_name=config.get("region", "us-east-1")
+                )
+            else:
+                raise ValueError(f"Unsupported storage type: {storage_type}")
+                
+        except Exception as e:
+            self.logger.error(f"Storage client error: {e}")
+            raise
     
-    def _list_storage_files(self, client, bucket: str, pattern: str, storage_type: str) -> List[str]:
+    def _list_storage_files(self, client, bucket: str, pattern: str, storage_type: str, prefix: str = "") -> List[str]:
         """List files in storage matching pattern."""
-        # Mock implementation
-        return []
+        try:
+            if storage_type == "s3":
+                response = client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+                files = [obj['Key'] for obj in response.get('Contents', [])]
+                
+                # Filter by pattern if specified
+                if pattern != "*":
+                    import fnmatch
+                    files = [f for f in files if fnmatch.fnmatch(f, pattern)]
+                
+                return files
+            else:
+                return []
+                
+        except Exception as e:
+            self.logger.error(f"Error listing storage files: {e}")
+            return []
     
-    def _extract_from_file(self, client, bucket: str, file_path: str, storage_type: str) -> List[Dict[str, Any]]:
+    def _extract_from_file(self, client, bucket: str, file_path: str, storage_type: str) -> pd.DataFrame:
         """Extract data from a single file."""
-        # Mock implementation
-        return []
+        try:
+            if storage_type == "s3":
+                # Download file to temporary location
+                temp_path = f"/tmp/{Path(file_path).name}"
+                client.download_file(bucket, file_path, temp_path)
+                
+                # Read file based on extension
+                file_ext = Path(file_path).suffix.lower()
+                if file_ext == '.csv':
+                    df = pd.read_csv(temp_path)
+                elif file_ext in ['.xlsx', '.xls']:
+                    df = pd.read_excel(temp_path)
+                elif file_ext == '.json':
+                    df = pd.read_json(temp_path)
+                elif file_ext == '.parquet':
+                    df = pd.read_parquet(temp_path)
+                else:
+                    self.logger.error(f"Unsupported file format: {file_ext}")
+                    return pd.DataFrame()
+                
+                # Clean up temporary file
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                
+                return df
+            else:
+                return pd.DataFrame()
+                
+        except Exception as e:
+            self.logger.error(f"Error extracting from file {file_path}: {e}")
+            return pd.DataFrame()
     
     def get_extraction_status(self, extraction_id: str) -> Dict[str, Any]:
         """Get status of an extraction."""

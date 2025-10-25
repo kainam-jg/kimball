@@ -8,13 +8,23 @@ This module provides connectors for various data sources:
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, Iterator
 import json
 import requests
 import boto3
 from azure.storage.blob import BlobServiceClient
 from google.cloud import storage
 import pandas as pd
+import sqlalchemy
+from sqlalchemy import create_engine, text, MetaData
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import clickhouse_connect
+import asyncio
+import aiohttp
+from datetime import datetime
+import os
+from pathlib import Path
 
 from ..core.logger import Logger
 
@@ -67,15 +77,14 @@ class DatabaseConnector(BaseConnector):
                     password=self.config["password"],
                     database=self.config["database"]
                 )
-            elif self.db_type == "postgresql":
-                import psycopg2
-                self.connection = psycopg2.connect(
-                    host=self.config["host"],
-                    port=self.config["port"],
-                    database=self.config["database"],
-                    user=self.config["username"],
-                    password=self.config["password"]
-                )
+            elif self.db_type == "postgres":
+                # Create SQLAlchemy engine for PostgreSQL
+                connection_string = f"postgresql://{self.config['user']}:{self.config['password']}@{self.config['host']}:{self.config['port']}/{self.config['database']}"
+                self.connection = create_engine(connection_string)
+                
+                # Test the connection
+                with self.connection.connect() as conn:
+                    conn.execute(text("SELECT 1"))
             elif self.db_type == "mysql":
                 import mysql.connector
                 self.connection = mysql.connector.connect(
@@ -198,9 +207,9 @@ class StorageConnector(BaseConnector):
             if self.storage_type == "s3":
                 self.client = boto3.client(
                     's3',
-                    aws_access_key_id=self.credentials.get("access_key"),
-                    aws_secret_access_key=self.credentials.get("secret_key"),
-                    region_name=self.credentials.get("region", "us-east-1")
+                    aws_access_key_id=self.config.get("access_key"),
+                    aws_secret_access_key=self.config.get("secret_key"),
+                    region_name=self.config.get("region", "us-east-1")
                 )
             elif self.storage_type == "azure":
                 self.client = BlobServiceClient.from_connection_string(
