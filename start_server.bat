@@ -51,10 +51,10 @@ echo Development Features:
 echo - Hot reloading enabled (auto-restart on code changes)
 echo - Debug mode enabled
 echo - Detailed error messages
-echo - File watching for all Python files
+echo - File watching for all Python files in 'kimball' and 'frontend'
 echo.
 echo Press Ctrl+C to stop the server
 echo.
-uvicorn kimball.api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir kimball --log-level debug
+uvicorn kimball.api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir kimball --reload-dir frontend --log-level debug
 
 pause

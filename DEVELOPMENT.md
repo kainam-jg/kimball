@@ -2,20 +2,14 @@
 
 ## 🚀 Quick Start
 
-### Development Mode (Recommended)
+### Start the Server
 ```bash
 # Start FastAPI server with hot reloading
-start_server_dev.bat
+start_server.bat
 
 # Start Streamlit frontend
 cd frontend
 start_streamlit.bat
-```
-
-### Production Mode
-```bash
-# Start FastAPI server optimized for production
-start_server_prod.bat
 ```
 
 ## 🔧 Development Features
@@ -37,15 +31,15 @@ start_server_prod.bat
 
 ```
 kimball/
-├── start_server.bat          # Basic server startup
-├── start_server_dev.bat      # Development mode (hot reloading)
-├── start_server_prod.bat     # Production mode (optimized)
+├── start_server.bat          # Start FastAPI server (development mode)
 ├── stop_server.bat           # Stop server
-├── test_server.py            # Test server functionality
+├── tests/                    # Test suite directory
+│   ├── test_server.py        # Test server functionality
+│   ├── test_streamlit.py     # Test Streamlit functionality
+│   └── test_acquire.py       # Test acquire phase
 ├── frontend/
 │   ├── start_streamlit.bat   # Start Streamlit frontend
-│   ├── stop_streamlit.bat    # Stop Streamlit frontend
-│   └── test_streamlit.py     # Test Streamlit functionality
+│   └── stop_streamlit.bat    # Stop Streamlit frontend
 └── requirements.txt          # Python dependencies
 ```
 
@@ -54,7 +48,7 @@ kimball/
 ### 1. Start Development Environment
 ```bash
 # Terminal 1: Start FastAPI backend
-start_server_dev.bat
+start_server.bat
 
 # Terminal 2: Start Streamlit frontend
 cd frontend
@@ -69,12 +63,13 @@ start_streamlit.bat
 
 ### 3. Test Changes
 ```bash
-# Test FastAPI server
-python test_server.py
+# Test all components
+python run_tests.py
 
-# Test Streamlit frontend
-cd frontend
-python test_streamlit.py
+# Test individual components
+python tests/test_server.py
+python tests/test_streamlit.py
+python tests/test_acquire.py
 ```
 
 ### 4. Stop Services
@@ -119,13 +114,7 @@ stop_streamlit.bat
 ### Development Deployment
 ```bash
 # Use development mode for local testing
-start_server_dev.bat
-```
-
-### Production Deployment
-```bash
-# Use production mode for deployment
-start_server_prod.bat
+start_server.bat
 ```
 
 ## 🔧 Configuration
@@ -143,7 +132,7 @@ start_server_prod.bat
 ## 📝 Best Practices
 
 ### Development
-1. **Use Development Mode**: Always use `start_server_dev.bat` for development
+1. **Use Development Mode**: Always use `start_server.bat` for development
 2. **Test Frequently**: Run test scripts after changes
 3. **Check Logs**: Monitor console output for errors
 4. **API Testing**: Use the interactive docs at `/docs`
