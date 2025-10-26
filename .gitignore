@@ -57,6 +57,7 @@ dag_*.py
 sql_*.sql
 
 # Configuration
+config.json
 config_local.json
 .env
 .env.local
@@ -65,7 +66,6 @@ config_local.json
 data/
 datasets/
 *.csv
-# config.json contains sensitive credentials - keep local only
 *.parquet
 *.xlsx
 *.xls
