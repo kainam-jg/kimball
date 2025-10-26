@@ -65,7 +65,7 @@ class DataSourceManager:
             source_type = source_config.get("type")
             
             # Create a temporary connector to test the connection
-            if source_type == "postgres":
+            if source_type == "postgresql":
                 connector = DatabaseConnector(source_config)
             elif source_type == "s3":
                 connector = S3DataProcessor(source_config)

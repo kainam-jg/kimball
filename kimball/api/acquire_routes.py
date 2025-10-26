@@ -54,7 +54,7 @@ class StorageExploreRequest(BaseModel):
 
 class DatabaseExploreRequest(BaseModel):
     """Request model for exploring database sources."""
-    schema: Optional[str] = None
+    schema_name: Optional[str] = None
     table_pattern: Optional[str] = None
 
 class StorageExtractionRequest(BaseModel):
@@ -496,8 +496,8 @@ async def _explore_postgres_tables(source_config: Dict[str, Any], request: Datab
         with engine.connect() as connection:
             # Build the query to get tables
             schema_filter = ""
-            if request.schema:
-                schema_filter = f"AND table_schema = '{request.schema}'"
+            if request.schema_name:
+                schema_filter = f"AND table_schema = '{request.schema_name}'"
             
             table_pattern_filter = ""
             if request.table_pattern:
@@ -530,7 +530,7 @@ async def _explore_postgres_tables(source_config: Dict[str, Any], request: Datab
                 "status": "success",
                 "source_type": "postgres",
                 "database": source_config.get("database"),
-                "schema_filter": request.schema,
+                "schema_filter": request.schema_name,
                 "table_pattern": request.table_pattern,
                 "tables": tables,
                 "table_count": len(tables),

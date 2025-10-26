@@ -184,7 +184,7 @@ def acquire_phase():
                         "database": database,
                         "user": user,
                         "password": password,
-                        "schema": schema
+                        "schema_name": schema
                     }
                 
                 elif st.session_state.source_type == "s3":
@@ -276,7 +276,7 @@ def acquire_phase():
                             "database": edit_database,
                             "user": edit_user,
                             "password": edit_password,
-                            "schema": edit_schema
+                            "schema_name": edit_schema
                         }
                     
                     elif edit_source_type == "s3":
@@ -413,7 +413,7 @@ def acquire_phase():
                         if st.form_submit_button("🔍 Discover Tables"):
                             try:
                                 payload = {
-                                    "schema": schema if schema else None,
+                                    "schema_name": schema if schema else None,
                                     "table_pattern": table_pattern if table_pattern else None
                                 }
                                 
@@ -563,7 +563,7 @@ def acquire_phase():
                                 payload = {
                                     "extraction_config": {
                                         "table_name": table_name,
-                                        "schema": schema_name,
+                                        "schema_name": schema_name,
                                         "limit": limit if limit > 0 else None
                                     },
                                     "batch_size": batch_size

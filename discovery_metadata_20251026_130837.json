@@ -1,0 +1,501 @@
+{
+  "schema_name": "bronze",
+  "analysis_timestamp": "2025-10-26T13:08:33.029101",
+  "total_tables": 4,
+  "tables": {
+    "daily_sales": {
+      "table_name": "daily_sales",
+      "row_count": 3193140,
+      "column_count": 5,
+      "columns": [
+        {
+          "name": "sales_date",
+          "bronze_type": "String",
+          "inferred_type": "integer",
+          "type_confidence": 1.0,
+          "cardinality": 2584,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.6,
+          "classification_reasoning": [],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 1.0,
+          "cardinality_ratio": 0.0008092347970962751,
+          "sample_values": [
+            "20220903",
+            "20220904",
+            "20220905"
+          ]
+        },
+        {
+          "name": "dealer_name",
+          "bronze_type": "String",
+          "inferred_type": "string",
+          "type_confidence": 0.0,
+          "cardinality": 95,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.7999999999999999,
+          "classification_reasoning": [
+            "Column name suggests identifier/key",
+            "Low cardinality non-numeric column (likely dimension)"
+          ],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 0.5475,
+          "cardinality_ratio": 2.9751279305010117e-05,
+          "sample_values": [
+            "Gestalt Velocity Autos Oslo",
+            "Gestalt Velocity Autos Sao Paulo",
+            "Luxury Motors Atlanta"
+          ]
+        },
+        {
+          "name": "vehicle_model",
+          "bronze_type": "String",
+          "inferred_type": "string",
+          "type_confidence": 0.0,
+          "cardinality": 12,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.6,
+          "classification_reasoning": [
+            "Low cardinality non-numeric column (likely dimension)"
+          ],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 0.506,
+          "cardinality_ratio": 3.7580563332644356e-06,
+          "sample_values": [
+            "Blitz GT",
+            "Eclipse Drive",
+            "Neon Pulse"
+          ]
+        },
+        {
+          "name": "amount_sales",
+          "bronze_type": "String",
+          "inferred_type": "decimal",
+          "type_confidence": 1.0,
+          "cardinality": 1907490,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.5,
+          "classification_reasoning": [],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 1.0,
+          "cardinality_ratio": 0.5973712395948815,
+          "sample_values": [
+            "9506.83",
+            "9576.50",
+            "44792.72"
+          ]
+        },
+        {
+          "name": "create_date",
+          "bronze_type": "String",
+          "inferred_type": "datetime",
+          "type_confidence": 1.0,
+          "cardinality": 1,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.9,
+          "classification_reasoning": [
+            "Date/time column (typically dimension)",
+            "Low cardinality non-numeric column (likely dimension)"
+          ],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 0.5005,
+          "cardinality_ratio": 3.1317136110536963e-07,
+          "sample_values": [
+            "2025-10-26 12:14:53"
+          ]
+        }
+      ],
+      "analysis_timestamp": "2025-10-26T13:08:34.704936",
+      "fact_columns": [],
+      "dimension_columns": [
+        "sales_date",
+        "dealer_name",
+        "vehicle_model",
+        "amount_sales",
+        "create_date"
+      ],
+      "primary_key_candidates": [],
+      "summary": {
+        "total_columns": 5,
+        "fact_columns": 0,
+        "dimension_columns": 5,
+        "avg_data_quality": 0.7107999999999999,
+        "high_quality_columns": 2,
+        "primary_key_candidates": 0,
+        "columns_with_nulls": 0,
+        "avg_type_confidence": 0.6
+      }
+    },
+    "dealer_regions": {
+      "table_name": "dealer_regions",
+      "row_count": 95,
+      "column_count": 6,
+      "columns": [
+        {
+          "name": "region",
+          "bronze_type": "String",
+          "inferred_type": "string",
+          "type_confidence": 0.0,
+          "cardinality": 3,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.6,
+          "classification_reasoning": [
+            "Low cardinality non-numeric column (likely dimension)"
+          ],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 0.5015,
+          "cardinality_ratio": 0.031578947368421054,
+          "sample_values": [
+            "EMEA",
+            "APAC",
+            "Americas"
+          ]
+        },
+        {
+          "name": "district",
+          "bronze_type": "String",
+          "inferred_type": "string",
+          "type_confidence": 0.0,
+          "cardinality": 7,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.6,
+          "classification_reasoning": [
+            "Low cardinality non-numeric column (likely dimension)"
+          ],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 0.5035,
+          "cardinality_ratio": 0.07368421052631578,
+          "sample_values": [
+            "Europe",
+            "Middle East",
+            "Asia"
+          ]
+        },
+        {
+          "name": "country_name",
+          "bronze_type": "String",
+          "inferred_type": "string",
+          "type_confidence": 0.0,
+          "cardinality": 51,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.7,
+          "classification_reasoning": [
+            "Column name suggests identifier/key"
+          ],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 0.5255,
+          "cardinality_ratio": 0.5368421052631579,
+          "sample_values": [
+            "Italy",
+            "UK",
+            "Qatar"
+          ]
+        },
+        {
+          "name": "city_name",
+          "bronze_type": "String",
+          "inferred_type": "string",
+          "type_confidence": 0.0,
+          "cardinality": 95,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.7,
+          "classification_reasoning": [
+            "Column name suggests identifier/key"
+          ],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 0.5475,
+          "cardinality_ratio": 1.0,
+          "sample_values": [
+            "Milan",
+            "London",
+            "Doha"
+          ]
+        },
+        {
+          "name": "dealer_name",
+          "bronze_type": "String",
+          "inferred_type": "string",
+          "type_confidence": 0.0,
+          "cardinality": 95,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.7,
+          "classification_reasoning": [
+            "Column name suggests identifier/key"
+          ],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 0.5475,
+          "cardinality_ratio": 1.0,
+          "sample_values": [
+            "Auto Esclusivo Milan",
+            "Auto Gallery London",
+            "Auto Hub Doha"
+          ]
+        },
+        {
+          "name": "create_date",
+          "bronze_type": "String",
+          "inferred_type": "datetime",
+          "type_confidence": 1.0,
+          "cardinality": 1,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.9,
+          "classification_reasoning": [
+            "Date/time column (typically dimension)",
+            "Low cardinality non-numeric column (likely dimension)"
+          ],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 0.5005,
+          "cardinality_ratio": 0.010526315789473684,
+          "sample_values": [
+            "2025-10-26 12:59:29"
+          ]
+        }
+      ],
+      "analysis_timestamp": "2025-10-26T13:08:35.962690",
+      "fact_columns": [],
+      "dimension_columns": [
+        "region",
+        "district",
+        "country_name",
+        "city_name",
+        "dealer_name",
+        "create_date"
+      ],
+      "primary_key_candidates": [],
+      "summary": {
+        "total_columns": 6,
+        "fact_columns": 0,
+        "dimension_columns": 6,
+        "avg_data_quality": 0.5209999999999999,
+        "high_quality_columns": 0,
+        "primary_key_candidates": 0,
+        "columns_with_nulls": 0,
+        "avg_type_confidence": 0.16666666666666666
+      }
+    },
+    "vehicles": {
+      "table_name": "vehicles",
+      "row_count": 12,
+      "column_count": 4,
+      "columns": [
+        {
+          "name": "vehicle_class",
+          "bronze_type": "String",
+          "inferred_type": "string",
+          "type_confidence": 0.0,
+          "cardinality": 3,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.5,
+          "classification_reasoning": [],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 0.5015,
+          "cardinality_ratio": 0.25,
+          "sample_values": [
+            "Cars",
+            "Light Trucks and SUVs",
+            "EV"
+          ]
+        },
+        {
+          "name": "vehicle_type",
+          "bronze_type": "String",
+          "inferred_type": "string",
+          "type_confidence": 0.0,
+          "cardinality": 9,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.5,
+          "classification_reasoning": [],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 0.5045,
+          "cardinality_ratio": 0.75,
+          "sample_values": [
+            "Luxury Sedan",
+            "Luxury SUV",
+            "Crossover SUV"
+          ]
+        },
+        {
+          "name": "vehicle_model",
+          "bronze_type": "String",
+          "inferred_type": "string",
+          "type_confidence": 0.0,
+          "cardinality": 12,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.5,
+          "classification_reasoning": [],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 0.506,
+          "cardinality_ratio": 1.0,
+          "sample_values": [
+            "Stratos LX",
+            "Summit Rover",
+            "TerraCruze"
+          ]
+        },
+        {
+          "name": "create_date",
+          "bronze_type": "String",
+          "inferred_type": "datetime",
+          "type_confidence": 1.0,
+          "cardinality": 1,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.9,
+          "classification_reasoning": [
+            "Date/time column (typically dimension)",
+            "Low cardinality non-numeric column (likely dimension)"
+          ],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 0.5005,
+          "cardinality_ratio": 0.08333333333333333,
+          "sample_values": [
+            "2025-10-26 12:59:30"
+          ]
+        }
+      ],
+      "analysis_timestamp": "2025-10-26T13:08:36.943548",
+      "fact_columns": [],
+      "dimension_columns": [
+        "vehicle_class",
+        "vehicle_type",
+        "vehicle_model",
+        "create_date"
+      ],
+      "primary_key_candidates": [],
+      "summary": {
+        "total_columns": 4,
+        "fact_columns": 0,
+        "dimension_columns": 4,
+        "avg_data_quality": 0.5031249999999999,
+        "high_quality_columns": 0,
+        "primary_key_candidates": 0,
+        "columns_with_nulls": 0,
+        "avg_type_confidence": 0.25
+      }
+    },
+    "vehicles_description": {
+      "table_name": "vehicles_description",
+      "row_count": 12,
+      "column_count": 3,
+      "columns": [
+        {
+          "name": "vehicle_model",
+          "bronze_type": "String",
+          "inferred_type": "string",
+          "type_confidence": 0.0,
+          "cardinality": 12,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.5,
+          "classification_reasoning": [],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 0.506,
+          "cardinality_ratio": 1.0,
+          "sample_values": [
+            "Stratos LX",
+            "Velocity RS",
+            "AeroX 200"
+          ]
+        },
+        {
+          "name": "vehicle_model_description",
+          "bronze_type": "String",
+          "inferred_type": "string",
+          "type_confidence": 0.0,
+          "cardinality": 12,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.5,
+          "classification_reasoning": [],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 0.506,
+          "cardinality_ratio": 1.0,
+          "sample_values": [
+            "Executive-class luxury sedan with adaptive suspension and massage seats, built for silent, smooth highway cruising.",
+            "Turbocharged performance sedan delivering 420 horsepower and precision handling for aggressive backroad driving.",
+            "Agile urban compact with exceptional fuel efficiency and smart parking assist \u2122\u201d ideal for city living."
+          ]
+        },
+        {
+          "name": "create_date",
+          "bronze_type": "String",
+          "inferred_type": "datetime",
+          "type_confidence": 1.0,
+          "cardinality": 1,
+          "null_count": 0,
+          "null_percentage": 0.0,
+          "classification": "dimension",
+          "classification_confidence": 0.9,
+          "classification_reasoning": [
+            "Date/time column (typically dimension)",
+            "Low cardinality non-numeric column (likely dimension)"
+          ],
+          "is_primary_key_candidate": false,
+          "data_quality_score": 0.5005,
+          "cardinality_ratio": 0.08333333333333333,
+          "sample_values": [
+            "2025-10-26 12:59:31"
+          ]
+        }
+      ],
+      "analysis_timestamp": "2025-10-26T13:08:37.905767",
+      "fact_columns": [],
+      "dimension_columns": [
+        "vehicle_model",
+        "vehicle_model_description",
+        "create_date"
+      ],
+      "primary_key_candidates": [],
+      "summary": {
+        "total_columns": 3,
+        "fact_columns": 0,
+        "dimension_columns": 3,
+        "avg_data_quality": 0.5041666666666667,
+        "high_quality_columns": 0,
+        "primary_key_candidates": 0,
+        "columns_with_nulls": 0,
+        "avg_type_confidence": 0.3333333333333333
+      }
+    }
+  },
+  "schema_summary": {
+    "total_tables": 4,
+    "total_columns": 18,
+    "total_fact_columns": 0,
+    "total_dimension_columns": 18,
+    "total_primary_key_candidates": 0,
+    "avg_columns_per_table": 4.5,
+    "fact_dimension_ratio": 0.0
+  }
+}

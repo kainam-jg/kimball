@@ -12,8 +12,8 @@ import logging
 from typing import Dict, Any
 
 from .acquire_routes import acquire_router
+from .discover_routes import discover_router
 # COMMENTED OUT FOR SYSTEMATIC TESTING
-# from .discover_routes import discover_router
 # from .model_routes import model_router
 # from .build_routes import build_router
 from ..core.config import Config
@@ -41,10 +41,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers for each phase - ONLY ACQUIRE FOR SYSTEMATIC TESTING
+# Include routers for each phase - ACQUIRE AND DISCOVER ACTIVE
 app.include_router(acquire_router, tags=["Acquire"])
+app.include_router(discover_router, tags=["Discover"])
 # COMMENTED OUT FOR SYSTEMATIC TESTING
-# app.include_router(discover_router, tags=["Discover"])
 # app.include_router(model_router, tags=["Model"])
 # app.include_router(build_router, tags=["Build"])
 
@@ -54,7 +54,7 @@ async def root():
     return {
         "message": "KIMBALL API - Kinetic Intelligent Model Builder",
         "version": "2.0.0",
-        "phases": ["Acquire"],  # Only Acquire active for systematic testing
+        "phases": ["Acquire", "Discover"],  # Acquire and Discover active
         "docs": "/docs",
         "redoc": "/redoc"
     }
