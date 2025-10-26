@@ -31,6 +31,17 @@ class DataSourceUpdateRequest(BaseModel):
     description: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
 
+class StorageExploreRequest(BaseModel):
+    """Request model for exploring storage sources."""
+    prefix: Optional[str] = ""
+    max_keys: Optional[int] = None
+    search_subdirectories: bool = True
+
+class DatabaseExploreRequest(BaseModel):
+    """Request model for exploring database sources."""
+    schema: Optional[str] = None
+    table_pattern: Optional[str] = None
+
 # Initialize router
 acquire_router = APIRouter(prefix="/api/v1/acquire", tags=["Acquire"])
 logger = Logger("acquire_api")
@@ -281,6 +292,229 @@ async def create_data_source(request: DataSourceConfigRequest):
     except Exception as e:
         logger.error(f"Error creating data source: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@acquire_router.post("/explore/storage/{source_id}")
+async def explore_storage_source(source_id: str, request: StorageExploreRequest):
+    """Explore objects in a storage source (S3, Azure, GCP, etc.)."""
+    try:
+        logger.log_api_call(f"/acquire/explore/storage/{source_id}", "POST", request_data=request.dict())
+        
+        # Get the source configuration
+        config_manager = Config()
+        config = config_manager.get_config()
+        data_sources = config.get("data_sources", {})
+        
+        if source_id not in data_sources:
+            raise HTTPException(status_code=404, detail=f"Data source '{source_id}' not found")
+        
+        source_config = data_sources[source_id]
+        source_type = source_config.get("type")
+        
+        # Validate that this is a storage source
+        storage_types = ["s3", "azure", "gcp"]
+        if source_type not in storage_types:
+            raise HTTPException(status_code=400, detail=f"Source '{source_id}' is not a storage source. Type: {source_type}")
+        
+        # Handle different storage types
+        if source_type == "s3":
+            return await _explore_s3_objects(source_config, request)
+        elif source_type == "azure":
+            return await _explore_azure_objects(source_config, request)
+        elif source_type == "gcp":
+            return await _explore_gcp_objects(source_config, request)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported storage type: {source_type}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error exploring storage source {source_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def _explore_s3_objects(source_config: Dict[str, Any], request: StorageExploreRequest) -> Dict[str, Any]:
+    """Explore S3 objects using boto3."""
+    try:
+        import boto3
+        
+        # Create S3 client
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=source_config.get("access_key"),
+            aws_secret_access_key=source_config.get("secret_key"),
+            region_name=source_config.get("region", "us-east-1")
+        )
+        
+        bucket_name = source_config.get("bucket")
+        if not bucket_name:
+            raise HTTPException(status_code=400, detail="S3 bucket name not configured")
+        
+        # Prepare list_objects_v2 parameters
+        kwargs = {
+            'Bucket': bucket_name,
+            'Prefix': request.prefix
+        }
+        
+        if request.max_keys:
+            kwargs['MaxKeys'] = request.max_keys
+        
+        if not request.search_subdirectories:
+            kwargs['Delimiter'] = '/'
+        
+        # List objects
+        response = s3_client.list_objects_v2(**kwargs)
+        
+        objects = []
+        if 'Contents' in response:
+            for obj in response['Contents']:
+                objects.append({
+                    'key': obj['Key'],
+                    'size': obj['Size'],
+                    'last_modified': obj['LastModified'].isoformat(),
+                    'etag': obj['ETag'],
+                    'storage_class': obj.get('StorageClass', 'STANDARD')
+                })
+        
+        # Handle common prefixes (folders) if delimiter is used
+        folders = []
+        if 'CommonPrefixes' in response:
+            for prefix in response['CommonPrefixes']:
+                folders.append({
+                    'prefix': prefix['Prefix'],
+                    'type': 'folder'
+                })
+        
+        return {
+            "status": "success",
+            "source_type": "s3",
+            "bucket": bucket_name,
+            "prefix": request.prefix,
+            "max_keys": request.max_keys,
+            "search_subdirectories": request.search_subdirectories,
+            "objects": objects,
+            "folders": folders,
+            "object_count": len(objects),
+            "folder_count": len(folders),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error exploring S3 objects: {e}")
+        raise HTTPException(status_code=500, detail=f"S3 exploration failed: {str(e)}")
+
+async def _explore_azure_objects(source_config: Dict[str, Any], request: StorageExploreRequest) -> Dict[str, Any]:
+    """Explore Azure Blob Storage objects."""
+    # TODO: Implement Azure Blob Storage exploration
+    raise HTTPException(status_code=501, detail="Azure Blob Storage exploration not yet implemented")
+
+async def _explore_gcp_objects(source_config: Dict[str, Any], request: StorageExploreRequest) -> Dict[str, Any]:
+    """Explore Google Cloud Storage objects."""
+    # TODO: Implement GCP Storage exploration
+    raise HTTPException(status_code=501, detail="GCP Storage exploration not yet implemented")
+
+@acquire_router.post("/explore/database/{source_id}")
+async def explore_database_source(source_id: str, request: DatabaseExploreRequest):
+    """Explore tables in a database source."""
+    try:
+        logger.log_api_call(f"/acquire/explore/database/{source_id}", "POST", request_data=request.dict())
+        
+        # Get the source configuration
+        config_manager = Config()
+        config = config_manager.get_config()
+        data_sources = config.get("data_sources", {})
+        
+        if source_id not in data_sources:
+            raise HTTPException(status_code=404, detail=f"Data source '{source_id}' not found")
+        
+        source_config = data_sources[source_id]
+        source_type = source_config.get("type")
+        
+        # Validate that this is a database source
+        database_types = ["postgres", "mysql", "sqlserver", "oracle", "clickhouse"]
+        if source_type not in database_types:
+            raise HTTPException(status_code=400, detail=f"Source '{source_id}' is not a database source. Type: {source_type}")
+        
+        # Handle different database types
+        if source_type == "postgres":
+            return await _explore_postgres_tables(source_config, request)
+        elif source_type == "mysql":
+            return await _explore_mysql_tables(source_config, request)
+        elif source_type == "clickhouse":
+            return await _explore_clickhouse_tables(source_config, request)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported database type: {source_type}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error exploring database source {source_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def _explore_postgres_tables(source_config: Dict[str, Any], request: DatabaseExploreRequest) -> Dict[str, Any]:
+    """Explore PostgreSQL tables."""
+    try:
+        from sqlalchemy import create_engine, text
+        
+        # Create connection string
+        conn_str = f"postgresql+psycopg2://{source_config['user']}:{source_config['password']}@{source_config['host']}:{source_config['port']}/{source_config['database']}"
+        engine = create_engine(conn_str)
+        
+        with engine.connect() as connection:
+            # Build the query to get tables
+            schema_filter = ""
+            if request.schema:
+                schema_filter = f"AND table_schema = '{request.schema}'"
+            
+            table_pattern_filter = ""
+            if request.table_pattern:
+                table_pattern_filter = f"AND table_name LIKE '{request.table_pattern}'"
+            
+            query = f"""
+            SELECT 
+                table_schema,
+                table_name,
+                table_type
+            FROM information_schema.tables 
+            WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+            {schema_filter}
+            {table_pattern_filter}
+            ORDER BY table_schema, table_name
+            """
+            
+            result = connection.execute(text(query))
+            tables = []
+            
+            for row in result:
+                tables.append({
+                    'schema': row[0],
+                    'table_name': row[1],
+                    'table_type': row[2],
+                    'full_name': f"{row[0]}.{row[1]}"
+                })
+            
+            return {
+                "status": "success",
+                "source_type": "postgres",
+                "database": source_config.get("database"),
+                "schema_filter": request.schema,
+                "table_pattern": request.table_pattern,
+                "tables": tables,
+                "table_count": len(tables),
+                "timestamp": datetime.now().isoformat()
+            }
+            
+    except Exception as e:
+        logger.error(f"Error exploring PostgreSQL tables: {e}")
+        raise HTTPException(status_code=500, detail=f"PostgreSQL exploration failed: {str(e)}")
+
+async def _explore_mysql_tables(source_config: Dict[str, Any], request: DatabaseExploreRequest) -> Dict[str, Any]:
+    """Explore MySQL tables."""
+    # TODO: Implement MySQL table exploration
+    raise HTTPException(status_code=501, detail="MySQL table exploration not yet implemented")
+
+async def _explore_clickhouse_tables(source_config: Dict[str, Any], request: DatabaseExploreRequest) -> Dict[str, Any]:
+    """Explore ClickHouse tables."""
+    # TODO: Implement ClickHouse table exploration
+    raise HTTPException(status_code=501, detail="ClickHouse table exploration not yet implemented")
 
 @acquire_router.get("/test/{source_id}")
 async def test_data_source_connection(source_id: str):

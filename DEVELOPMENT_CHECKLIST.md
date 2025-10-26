@@ -11,6 +11,10 @@
 - ✅ `DELETE /api/v1/acquire/datasources/{source_id}` - Delete data source configuration
 - ✅ `GET /api/v1/acquire/test/{source_id}` - Test data source connection (PostgreSQL ✅, S3 ✅)
 
+### **Data Source Exploration**
+- ✅ `POST /api/v1/acquire/explore/storage/{source_id}` - Explore storage sources (S3 ✅, Azure 🔄, GCP 🔄)
+- ✅ `POST /api/v1/acquire/explore/database/{source_id}` - Explore database sources (PostgreSQL ✅, MySQL 🔄, ClickHouse 🔄)
+
 ### **Connection Test Results**
 - ✅ **PostgreSQL**: `Vehicle Sales Data` - Connection successful
 - ✅ **S3**: `AWS S3 Bucket` - Connection successful
@@ -40,31 +44,38 @@
 - ✅ S3 connection testing with proper credentials
 - ✅ Complete CRUD operations for data sources (create, read, update, delete)
 - ✅ Data source validation and error handling
+- ✅ S3 object exploration with filtering and pagination
+- ✅ PostgreSQL table exploration with schema filtering
+- ✅ Source type validation (storage vs database)
 - ✅ Clear separation between working and untested code
 
 ### **Ready for Systematic Implementation**
-- 🔄 S3 object discovery
-- 🔄 Database table discovery
 - 🔄 SQL query execution
 - 🔄 Data extraction and loading
 - 🔄 Parallel processing
 - 🔄 Data validation
+- 🔄 Azure Blob Storage exploration
+- 🔄 GCP Storage exploration
+- 🔄 MySQL table exploration
+- 🔄 ClickHouse table exploration
 
 ## 📋 **SYSTEMATIC DEVELOPMENT APPROACH**
 
-### **Current Phase: Data Source Management Complete**
+### **Current Phase: Data Source Exploration Complete**
 1. ✅ **Clean codebase** - No import errors, clear separation
 2. ✅ **Working connections** - Both PostgreSQL and S3 tested
 3. ✅ **Complete CRUD** - Full data source management implemented and tested
-4. 🔄 **Next**: Implement discovery endpoints (S3 objects, database tables)
+4. ✅ **Data Source Exploration** - S3 object listing and PostgreSQL table listing implemented and tested
+5. 🔄 **Next**: Implement SQL query execution and data extraction
 
 ### **Implementation Order**
 1. ✅ **Data Source CRUD** - Create, update, delete, get specific data sources
-2. 🔄 **Discovery** - S3 object listing, database table listing
-3. 🔄 **Extraction** - Single file extraction and loading
-4. 🔄 **Validation** - Data integrity verification
-5. 🔄 **Parallel Processing** - Multiple file handling
-6. 🔄 **Advanced Features** - Error handling, retry logic, progress tracking
+2. ✅ **Data Source Exploration** - S3 object listing, PostgreSQL table listing
+3. 🔄 **SQL Query Execution** - Execute custom SQL queries against database sources
+4. 🔄 **Data Extraction** - Single file extraction and loading
+5. 🔄 **Validation** - Data integrity verification
+6. 🔄 **Parallel Processing** - Multiple file handling
+7. 🔄 **Advanced Features** - Error handling, retry logic, progress tracking
 
 ## 🚨 **CRITICAL RULES**
 
@@ -78,9 +89,10 @@
 
 1. ✅ **Foundation Complete** - Clean, minimal, working codebase
 2. ✅ **Data Source CRUD Complete** - Full CRUD operations implemented and tested
-3. 🔄 **Implement Discovery** - S3 object listing, database table listing
-4. 🔄 **Test Discovery** - Verify discovery endpoints work correctly
-5. 🔄 **Implement Extraction** - Single file extraction and loading
+3. ✅ **Data Source Exploration Complete** - S3 object listing and PostgreSQL table listing implemented and tested
+4. 🔄 **Implement SQL Query Execution** - Execute custom SQL queries against database sources
+5. 🔄 **Test SQL Query Execution** - Verify query execution works correctly
+6. 🔄 **Implement Data Extraction** - Single file extraction and loading
 
 ## 🔍 **VERIFICATION COMMANDS**
 
@@ -113,6 +125,16 @@ curl -X GET "http://localhost:8000/api/v1/acquire/test/Vehicle%20Sales%20Data"
 
 # Test S3 Connection
 curl -X GET "http://localhost:8000/api/v1/acquire/test/AWS%20S3%20Bucket"
+
+# Explore S3 Storage
+curl -X POST "http://localhost:8000/api/v1/acquire/explore/storage/AWS%20S3%20Bucket" \
+  -H "Content-Type: application/json" \
+  -d '{"prefix": "", "max_keys": 10, "search_subdirectories": true}'
+
+# Explore PostgreSQL Database
+curl -X POST "http://localhost:8000/api/v1/acquire/explore/database/Vehicle%20Sales%20Data" \
+  -H "Content-Type: application/json" \
+  -d '{"schema": "vehicles", "table_pattern": ""}'
 ```
 
 ### **Check Available Endpoints**
@@ -122,10 +144,11 @@ curl -X GET "http://localhost:8000/openapi.json" | jq '.paths | keys'
 
 ## 📊 **CURRENT METRICS**
 
-- **Working Endpoints**: 7 (Status, List, Get, Create, Update, Delete, Test)
-- **Commented Out Endpoints**: ~10
+- **Working Endpoints**: 9 (Status, List, Get, Create, Update, Delete, Test, Storage Explore, Database Explore)
+- **Commented Out Endpoints**: ~8
 - **Data Sources**: 2 (PostgreSQL ✅, S3 ✅)
 - **Connection Tests**: 2/2 passing
 - **CRUD Operations**: 5/5 implemented and tested
+- **Exploration Operations**: 2/2 implemented and tested (S3 ✅, PostgreSQL ✅)
 - **Import Errors**: 0
 - **Server Startup**: Clean ✅
