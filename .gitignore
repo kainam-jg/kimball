@@ -150,3 +150,6 @@ KIMBALL.txt
 
 # Test files and data
 tests/
+
+# Archive folder for preserved functions
+archive/

@@ -19,7 +19,6 @@ from ..core.logger import Logger
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-from connection import get_clickhouse_connection
 
 class MetadataAnalyzer:
     """

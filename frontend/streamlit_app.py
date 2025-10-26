@@ -61,7 +61,7 @@ def acquire_phase():
     st.write("Connect to data sources, extract data, and load into the bronze layer.")
     
     # Acquire phase tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["Data Sources", "Connections", "Extraction", "Loading"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Data Sources", "Discover", "Connections", "Extraction", "Loading"])
     
     with tab1:
         st.subheader("Data Source Management")
@@ -344,6 +344,154 @@ def acquire_phase():
                         st.error(f"❌ Error: {str(e)}")
     
     with tab2:
+        st.subheader("Data Discovery")
+        st.write("Discover objects in S3 buckets and tables in databases.")
+        
+        # Discovery type selection
+        discovery_type = st.selectbox(
+            "Discovery Type",
+            ["S3 Objects", "Database Tables", "SQL Query"]
+        )
+        
+        if discovery_type == "S3 Objects":
+            st.subheader("🔍 S3 Object Discovery")
+            
+            with st.form("s3_discovery"):
+                bucket = st.text_input("S3 Bucket", value="kimball-data")
+                prefix = st.text_input("Prefix (optional)", value="vehicle_sales_data/")
+                max_keys = st.number_input("Max Objects (leave empty for no limit)", value=None, min_value=1, max_value=10000, help="Leave empty to get all objects")
+                search_subdirectories = st.checkbox("Search Subdirectories", value=True, help="If unchecked, only search at the current directory level")
+                
+                if st.form_submit_button("🔍 Discover Objects"):
+                    try:
+                        payload = {
+                            "bucket": bucket,
+                            "prefix": prefix,
+                            "search_subdirectories": search_subdirectories
+                        }
+                        
+                        # Only add max_keys if it has a value
+                        if max_keys:
+                            payload["max_keys"] = max_keys
+                        
+                        response = requests.post(f"{API_ENDPOINTS['acquire']}/discover/s3-objects", json=payload)
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            st.success(f"✅ Found {data['count']} objects")
+                            
+                            # Display objects in a table
+                            if data['objects']:
+                                objects_df = pd.DataFrame(data['objects'])
+                                st.dataframe(objects_df, use_container_width=True)
+                                
+                                # Store objects for extraction
+                                st.session_state.s3_objects = data['objects']
+                            else:
+                                st.info("No objects found")
+                        else:
+                            st.error(f"❌ Discovery failed: {response.text}")
+                            
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
+        
+        elif discovery_type == "Database Tables":
+            st.subheader("🔍 Database Table Discovery")
+            
+            if "data_sources" in st.session_state and st.session_state.data_sources:
+                # Find database sources
+                db_sources = {k: v for k, v in st.session_state.data_sources.items() 
+                             if v.get('type') in ['postgres', 'mysql', 'clickhouse']}
+                
+                if db_sources:
+                    selected_db = st.selectbox("Select Database Source", list(db_sources.keys()), key="db_discovery_selector")
+                    
+                    with st.form("db_discovery"):
+                        schema = st.text_input("Schema (optional)", value="vehicles")
+                        table_pattern = st.text_input("Table Pattern (optional)", placeholder="sales%")
+                        
+                        if st.form_submit_button("🔍 Discover Tables"):
+                            try:
+                                payload = {
+                                    "schema": schema if schema else None,
+                                    "table_pattern": table_pattern if table_pattern else None
+                                }
+                                
+                                response = requests.post(f"{API_ENDPOINTS['acquire']}/discover/database-tables/{selected_db}", json=payload)
+                                
+                                if response.status_code == 200:
+                                    data = response.json()
+                                    st.success(f"✅ Found {data['count']} tables")
+                                    
+                                    # Display tables
+                                    if data['tables']:
+                                        tables_df = pd.DataFrame(data['tables'])
+                                        st.dataframe(tables_df, use_container_width=True)
+                                        
+                                        # Store tables for extraction
+                                        st.session_state.db_tables = data['tables']
+                                    else:
+                                        st.info("No tables found")
+                                else:
+                                    st.error(f"❌ Discovery failed: {response.text}")
+                                    
+                            except Exception as e:
+                                st.error(f"❌ Error: {str(e)}")
+                else:
+                    st.info("No database sources available. Add a database source first.")
+            else:
+                st.info("No data sources available. Add a data source first.")
+        
+        elif discovery_type == "SQL Query":
+            st.subheader("🔍 SQL Query Execution")
+            
+            if "data_sources" in st.session_state and st.session_state.data_sources:
+                # Find database sources
+                db_sources = {k: v for k, v in st.session_state.data_sources.items() 
+                             if v.get('type') in ['postgres', 'mysql', 'clickhouse']}
+                
+                if db_sources:
+                    selected_db = st.selectbox("Select Database Source", list(db_sources.keys()), key="sql_query_selector")
+                    
+                    with st.form("sql_query"):
+                        query = st.text_area("SQL Query", value="SELECT * FROM vehicles.sales LIMIT 10", height=100)
+                        limit = st.number_input("Limit (optional)", value=10, min_value=1, max_value=1000)
+                        
+                        if st.form_submit_button("🔍 Execute Query"):
+                            try:
+                                payload = {
+                                    "query": query,
+                                    "limit": limit
+                                }
+                                
+                                response = requests.post(f"{API_ENDPOINTS['acquire']}/execute/sql-query/{selected_db}", json=payload)
+                                
+                                if response.status_code == 200:
+                                    data = response.json()
+                                    st.success(f"✅ Query executed successfully")
+                                    st.write(f"**Query:** {data['query']}")
+                                    st.write(f"**Rows returned:** {data['row_count']}")
+                                    
+                                    # Display results
+                                    if data['result']:
+                                        results_df = pd.DataFrame(data['result'])
+                                        st.dataframe(results_df, use_container_width=True)
+                                        
+                                        # Store results for extraction
+                                        st.session_state.query_results = data['result']
+                                    else:
+                                        st.info("No results returned")
+                                else:
+                                    st.error(f"❌ Query execution failed: {response.text}")
+                                    
+                            except Exception as e:
+                                st.error(f"❌ Error: {str(e)}")
+                else:
+                    st.info("No database sources available. Add a database source first.")
+            else:
+                st.info("No data sources available. Add a data source first.")
+
+    with tab3:
         st.subheader("Connection Management")
         
         if "data_sources" in st.session_state and st.session_state.data_sources:
@@ -518,53 +666,172 @@ def acquire_phase():
             st.info("No data sources available. Add a data source first.")
     
     with tab4:
-        st.subheader("Bronze Layer Loading")
+        st.subheader("Data Extraction & Loading")
+        st.write("Extract data from discovered sources and load to bronze layer.")
         
-        if "extraction_id" in st.session_state:
-            st.write(f"**Ready to load extraction:** {st.session_state.extraction_id}")
+        # Check for available data sources
+        if "data_sources" in st.session_state and st.session_state.data_sources:
+            # Source selection
+            selected_source = st.selectbox(
+                "Select Data Source",
+                list(st.session_state.data_sources.keys()),
+                key="extract_source_selector"
+            )
             
-            target_table = st.text_input("Target Table Name", placeholder="bronze_users")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                batch_size = st.number_input("Load Batch Size", value=1000, min_value=1, max_value=10000)
-            with col2:
-                overwrite = st.checkbox("Overwrite existing data", value=False)
-            
-            if st.button("📤 Load to Bronze Layer", key="load_bronze"):
-                with st.spinner("Loading data to bronze layer..."):
-                    try:
-                        payload = {
-                            "extraction_id": st.session_state.extraction_id,
-                            "target_table": target_table,
-                            "load_config": {
-                                "batch_size": batch_size,
-                                "overwrite": overwrite
-                            }
-                        }
+            if selected_source:
+                source_config = st.session_state.data_sources[selected_source]
+                st.write(f"**Source Type:** {source_config.get('type', 'unknown')}")
+                
+                # Extraction type selection
+                extraction_type = st.selectbox(
+                    "Extraction Type",
+                    ["S3 Objects", "SQL Query", "Table Data"],
+                    key="extraction_type_selector"
+                )
+                
+                target_table = st.text_input("Target Table Name", placeholder="bronze_sales_data")
+                
+                if extraction_type == "S3 Objects":
+                    st.subheader("📁 S3 Object Extraction")
+                    
+                    if "s3_objects" in st.session_state and st.session_state.s3_objects:
+                        st.write(f"**Available Objects:** {len(st.session_state.s3_objects)}")
                         
-                        response = requests.post(f"{API_ENDPOINTS['acquire']}/load/{selected_source}", json=payload)
+                        # Object selection
+                        selected_objects = st.multiselect(
+                            "Select Objects to Extract",
+                            [obj['key'] for obj in st.session_state.s3_objects],
+                            default=[obj['key'] for obj in st.session_state.s3_objects[:3]]  # Select first 3 by default
+                        )
                         
-                        if response.status_code == 200:
-                            result = response.json()
-                            st.success("✅ Data loaded to bronze layer successfully!")
-                            
-                            # Display loading results
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("Records Loaded", result.get("records_processed", 0))
-                            with col2:
-                                st.metric("Target Table", target_table)
-                            with col3:
-                                st.metric("Load ID", result.get("load_id", "N/A"))
+                        if selected_objects and target_table:
+                            if st.button("📤 Extract & Load to Bronze", key="extract_s3"):
+                                with st.spinner("Extracting and loading data..."):
+                                    try:
+                                        payload = {
+                                            "source_id": selected_source,
+                                            "table_name": target_table,
+                                            "extraction_type": "s3_objects",
+                                            "extraction_config": {
+                                                "objects": selected_objects
+                                            },
+                                            "target_table": target_table
+                                        }
+                                        
+                                        response = requests.post(f"{API_ENDPOINTS['acquire']}/extract-data", json=payload)
+                                        
+                                        if response.status_code == 200:
+                                            result = response.json()
+                                            st.success("✅ Data extracted and loaded successfully!")
+                                            
+                                            # Display results
+                                            col1, col2, col3 = st.columns(3)
+                                            with col1:
+                                                st.metric("Records Extracted", result.get("records_extracted", 0))
+                                            with col2:
+                                                st.metric("Records Loaded", result.get("records_loaded", 0))
+                                            with col3:
+                                                st.metric("Target Table", result.get("target_table", "N/A"))
+                                            
+                                            st.write(f"**Load ID:** {result.get('load_id', 'N/A')}")
+                                        else:
+                                            st.error(f"❌ Extraction failed: {response.text}")
+                                            
+                                    except Exception as e:
+                                        st.error(f"❌ Error: {str(e)}")
+                    else:
+                        st.info("No S3 objects available. Use the Discover tab to find S3 objects first.")
+                
+                elif extraction_type == "SQL Query":
+                    st.subheader("🔍 SQL Query Extraction")
+                    
+                    query = st.text_area("SQL Query", value="SELECT * FROM vehicles.sales LIMIT 100", height=100)
+                    
+                    if query and target_table:
+                        if st.button("📤 Extract & Load to Bronze", key="extract_sql"):
+                            with st.spinner("Executing query and loading data..."):
+                                try:
+                                    payload = {
+                                        "source_id": selected_source,
+                                        "table_name": target_table,
+                                        "extraction_type": "sql_query",
+                                        "extraction_config": {
+                                            "query": query
+                                        },
+                                        "target_table": target_table
+                                    }
+                                    
+                                    response = requests.post(f"{API_ENDPOINTS['acquire']}/extract-data", json=payload)
+                                    
+                                    if response.status_code == 200:
+                                        result = response.json()
+                                        st.success("✅ Data extracted and loaded successfully!")
+                                        
+                                        # Display results
+                                        col1, col2, col3 = st.columns(3)
+                                        with col1:
+                                            st.metric("Records Extracted", result.get("records_extracted", 0))
+                                        with col2:
+                                            st.metric("Records Loaded", result.get("records_loaded", 0))
+                                        with col3:
+                                            st.metric("Target Table", result.get("target_table", "N/A"))
+                                        
+                                        st.write(f"**Load ID:** {result.get('load_id', 'N/A')}")
+                                    else:
+                                        st.error(f"❌ Extraction failed: {response.text}")
+                                        
+                                except Exception as e:
+                                    st.error(f"❌ Error: {str(e)}")
+                
+                elif extraction_type == "Table Data":
+                    st.subheader("📊 Table Data Extraction")
+                    
+                    if "db_tables" in st.session_state and st.session_state.db_tables:
+                        selected_table = st.selectbox(
+                            "Select Table",
+                            [table['name'] for table in st.session_state.db_tables],
+                            key="table_selector"
+                        )
                         
-                        else:
-                            st.error(f"❌ Loading failed: {response.text}")
-                            
-                    except Exception as e:
-                        st.error(f"❌ Error: {str(e)}")
+                        if selected_table and target_table:
+                            if st.button("📤 Extract & Load to Bronze", key="extract_table"):
+                                with st.spinner("Extracting table data and loading..."):
+                                    try:
+                                        payload = {
+                                            "source_id": selected_source,
+                                            "table_name": target_table,
+                                            "extraction_type": "table_data",
+                                            "extraction_config": {
+                                                "table_name": selected_table
+                                            },
+                                            "target_table": target_table
+                                        }
+                                        
+                                        response = requests.post(f"{API_ENDPOINTS['acquire']}/extract-data", json=payload)
+                                        
+                                        if response.status_code == 200:
+                                            result = response.json()
+                                            st.success("✅ Data extracted and loaded successfully!")
+                                            
+                                            # Display results
+                                            col1, col2, col3 = st.columns(3)
+                                            with col1:
+                                                st.metric("Records Extracted", result.get("records_extracted", 0))
+                                            with col2:
+                                                st.metric("Records Loaded", result.get("records_loaded", 0))
+                                            with col3:
+                                                st.metric("Target Table", result.get("target_table", "N/A"))
+                                            
+                                            st.write(f"**Load ID:** {result.get('load_id', 'N/A')}")
+                                        else:
+                                            st.error(f"❌ Extraction failed: {response.text}")
+                                            
+                                    except Exception as e:
+                                        st.error(f"❌ Error: {str(e)}")
+                    else:
+                        st.info("No database tables available. Use the Discover tab to find tables first.")
         else:
-            st.info("No extraction available. Extract data first.")
+            st.info("No data sources available. Add a data source first.")
         
         # Full pipeline option
         st.subheader("Full Pipeline")
@@ -762,7 +1029,8 @@ def discover_phase():
                         # Allow selection of catalog
                         selected_catalog = st.selectbox(
                             "Select Catalog",
-                            [cat["catalog_id"] for cat in catalogs_data["catalogs"]]
+                            [cat["catalog_id"] for cat in catalogs_data["catalogs"]],
+                            key="catalog_selector"
                         )
                         
                         if st.button("Load Catalog"):

@@ -11,10 +11,9 @@ from datetime import datetime
 
 from ..acquire.source_manager import DataSourceManager
 from ..core.logger import Logger
-from ..core.config import Config
 
 # Initialize router
-acquire_router = APIRouter(prefix="/api/v1/acquire", tags=["Acquire"])
+acquire_router = APIRouter(prefix="/api/v1/acquire", tags=["acquire"])
 logger = Logger("acquire_api")
 
 # Initialize data source manager
@@ -27,48 +26,19 @@ async def get_acquire_status():
     try:
         logger.log_api_call("/acquire/status", "GET")
         
-        config_manager = Config()
-        config = config_manager.get_config()
-        data_sources = config.get("data_sources", {})
-        
-        # Count enabled vs disabled sources
-        enabled_count = sum(1 for source in data_sources.values() if source.get("enabled", True))
-        disabled_count = len(data_sources) - enabled_count
+        # Get available sources
+        sources = source_manager.get_available_sources()
         
         return {
             "status": "success",
             "phase": "acquire",
-            "total_sources": len(data_sources),
-            "enabled_sources": enabled_count,
-            "disabled_sources": disabled_count,
-            "source_types": list(set(source.get("type", "unknown") for source in data_sources.values())),
+            "available_sources": len(sources),
+            "sources": sources,
             "timestamp": datetime.now().isoformat()
         }
         
     except Exception as e:
         logger.error(f"Error getting acquire status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Data Source Management Endpoints
-@acquire_router.get("/datasources")
-async def list_data_sources():
-    """List all configured data sources."""
-    try:
-        logger.log_api_call("/acquire/datasources", "GET")
-        
-        config_manager = Config()
-        config = config_manager.get_config()
-        data_sources = config.get("data_sources", {})
-        
-        return {
-            "status": "success",
-            "data_sources": data_sources,
-            "count": len(data_sources),
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"Error listing data sources: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # COMMENTED OUT ALL OTHER ENDPOINTS FOR SYSTEMATIC TESTING
@@ -100,39 +70,10 @@ async def list_data_sources():
 #     """Delete a data source configuration."""
 #     pass
 
-@acquire_router.get("/test/{source_id}")
-async def test_data_source_connection(source_id: str):
-    """Test connection to a data source."""
-    try:
-        logger.log_api_call(f"/acquire/test/{source_id}", "GET")
-        
-        # Get the source configuration
-        config_manager = Config()
-        config = config_manager.get_config()
-        data_sources = config.get("data_sources", {})
-        
-        if source_id not in data_sources:
-            raise HTTPException(status_code=404, detail=f"Data source '{source_id}' not found")
-        
-        source_config = data_sources[source_id]
-        
-        # Test the connection using DataSourceManager
-        test_result = source_manager.test_source_connection(source_id)
-        
-        return {
-            "status": "success" if test_result else "failed",
-            "source_id": source_id,
-            "source_type": source_config.get("type"),
-            "connection_test": test_result,
-            "message": f"Connection test {'passed' if test_result else 'failed'} for {source_id}",
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error testing connection to {source_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# @acquire_router.get("/test/{source_id}")
+# async def test_data_source_connection(source_id: str):
+#     """Test connection to a data source."""
+#     pass
 
 # # Discovery Endpoints
 # @acquire_router.post("/discover/s3-objects")

@@ -1,33 +1,18 @@
 """
 KIMBALL Data Source Connectors
 
-This module provides connectors for various data sources:
-- Database connectors (ClickHouse, PostgreSQL, MySQL, Oracle, SQL Server)
-- API connectors (REST, GraphQL, SOAP)
-- Storage connectors (S3, Azure Blob, GCS, Local)
+This module provides simplified connectors for database sources only.
+Storage sources now use the new bucket processor architecture.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Any, Optional, Union, Iterator
-import json
-import requests
-import boto3
-try:
-    from azure.storage.blob import BlobServiceClient
-except ImportError:
-    BlobServiceClient = None
-from google.cloud import storage
-import pandas as pd
+from typing import Dict, List, Any, Optional
 import sqlalchemy
 from sqlalchemy import create_engine, text, MetaData
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import clickhouse_connect
-import asyncio
-import aiohttp
 from datetime import datetime
-import os
-from pathlib import Path
 
 from ..core.logger import Logger
 
@@ -54,51 +39,44 @@ class BaseConnector(ABC):
     def test_connection(self) -> bool:
         """Test the connection."""
         pass
-    
-    @abstractmethod
-    def get_schema(self) -> Dict[str, Any]:
-        """Get schema information from source."""
-        pass
 
 class DatabaseConnector(BaseConnector):
-    """Database connector for various database types."""
+    """Database connector for SQL databases."""
     
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
-        self.db_type = config.get("type", "clickhouse")
+        self.db_type = config.get("type", "postgres")
         self.connection = None
     
     def connect(self) -> bool:
         """Connect to database."""
         try:
-            if self.db_type == "clickhouse":
-                import clickhouse_connect
-                self.connection = clickhouse_connect.get_client(
-                    host=self.config["host"],
-                    port=self.config["port"],
-                    username=self.config["username"],
-                    password=self.config["password"],
-                    database=self.config["database"]
-                )
-            elif self.db_type == "postgres":
-                # Create SQLAlchemy engine for PostgreSQL
-                connection_string = f"postgresql://{self.config['user']}:{self.config['password']}@{self.config['host']}:{self.config['port']}/{self.config['database']}"
+            if self.db_type == "postgres":
+                # PostgreSQL connection
+                host = self.config.get("host")
+                port = self.config.get("port", 5432)
+                user = self.config.get("user")
+                password = self.config.get("password")
+                database = self.config.get("database")
+                
+                connection_string = f"postgresql://{user}:{password}@{host}:{port}/{database}"
                 self.connection = create_engine(connection_string)
                 
-                # Test the connection
-                with self.connection.connect() as conn:
-                    conn.execute(text("SELECT 1"))
-            elif self.db_type == "mysql":
-                import mysql.connector
-                self.connection = mysql.connector.connect(
-                    host=self.config["host"],
-                    port=self.config["port"],
-                    database=self.config["database"],
-                    user=self.config["username"],
-                    password=self.config["password"]
+            elif self.db_type == "clickhouse":
+                # ClickHouse connection
+                host = self.config.get("host")
+                port = self.config.get("port", 8123)
+                user = self.config.get("user", "default")
+                password = self.config.get("password", "")
+                database = self.config.get("database", "default")
+                
+                self.connection = clickhouse_connect.get_client(
+                    host=host,
+                    port=port,
+                    username=user,
+                    password=password,
+                    database=database
                 )
-            else:
-                raise ValueError(f"Unsupported database type: {self.db_type}")
             
             self.logger.info(f"Connected to {self.db_type} database")
             return True
@@ -110,68 +88,130 @@ class DatabaseConnector(BaseConnector):
     def disconnect(self):
         """Disconnect from database."""
         if self.connection:
-            if hasattr(self.connection, 'close'):
-                self.connection.close()
-            self.connection = None
-            self.logger.info("Disconnected from database")
+            try:
+                if hasattr(self.connection, 'close'):
+                    self.connection.close()
+                elif hasattr(self.connection, 'disconnect'):
+                    self.connection.disconnect()
+                self.logger.info("Disconnected from database")
+            except Exception as e:
+                self.logger.error(f"Error disconnecting: {str(e)}")
     
     def test_connection(self) -> bool:
         """Test database connection."""
+        if not self.connect():
+            return False
+        
         try:
-            # First ensure we're connected
-            if not self.connect():
-                return False
-                
-            if self.db_type == "clickhouse":
-                result = self.connection.command("SELECT 1")
-                return result is not None
-            elif self.db_type == "postgres":
+            if self.db_type == "postgres":
                 with self.connection.connect() as conn:
-                    result = conn.execute(text("SELECT 1"))
-                    return result is not None
-            elif self.db_type == "mysql":
-                cursor = self.connection.cursor()
-                cursor.execute("SELECT 1")
-                result = cursor.fetchone()
-                cursor.close()
-                return result is not None
-            else:
-                return True
+                    conn.execute(text("SELECT 1"))
+            elif self.db_type == "clickhouse":
+                self.connection.command("SELECT 1")
+            
+            self.logger.info("Database connection test successful")
+            return True
+            
         except Exception as e:
-            self.logger.error(f"Connection test failed: {str(e)}")
+            self.logger.error(f"Database connection test failed: {str(e)}")
             return False
     
-    def get_schema(self) -> Dict[str, Any]:
-        """Get database schema information."""
+    def get_tables(self, schema: Optional[str] = None, table_pattern: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get list of tables in the database."""
         try:
-            if self.db_type == "clickhouse":
-                tables = self.connection.query("SHOW TABLES").result_rows
-                schema = {}
-                for table in tables:
-                    table_name = table[0]
-                    columns = self.connection.query(f"DESCRIBE TABLE {table_name}").result_rows
-                    schema[table_name] = [{"name": col[0], "type": col[1]} for col in columns]
-                return schema
-            else:
-                # Implement for other database types
-                return {}
+            if not self.connect():
+                return []
+            
+            tables = []
+            
+            if self.db_type == "postgres":
+                with self.connection.connect() as conn:
+                    query = """
+                    SELECT table_name, table_schema 
+                    FROM information_schema.tables 
+                    WHERE table_schema = %s
+                    """
+                    if table_pattern:
+                        query += " AND table_name LIKE %s"
+                        result = conn.execute(text(query), (schema, f"%{table_pattern}%"))
+                    else:
+                        result = conn.execute(text(query), (schema,))
+                    
+                    for row in result:
+                        tables.append({
+                            "table_name": row[0],
+                            "schema": row[1]
+                        })
+            
+            elif self.db_type == "clickhouse":
+                result = self.connection.query("SHOW TABLES")
+                for row in result.result_rows:
+                    tables.append({
+                        "table_name": row[0],
+                        "schema": "default"
+                    })
+            
+            return tables
+            
         except Exception as e:
-            self.logger.error(f"Failed to get schema: {str(e)}")
-            return {}
+            self.logger.error(f"Error getting tables: {str(e)}")
+            return []
+    
+    def execute_query(self, query: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Execute a SQL query and return results."""
+        try:
+            if not self.connect():
+                return []
+            
+            if limit:
+                query = f"{query} LIMIT {limit}"
+            
+            results = []
+            
+            if self.db_type == "postgres":
+                with self.connection.connect() as conn:
+                    result = conn.execute(text(query))
+                    for row in result:
+                        results.append(dict(row._mapping))
+            
+            elif self.db_type == "clickhouse":
+                result = self.connection.query(query)
+                columns = [col[0] for col in result.column_names]
+                for row in result.result_rows:
+                    results.append(dict(zip(columns, row)))
+            
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Error executing query: {str(e)}")
+            return []
+    
+    def extract_table(self, table_name: str) -> List[Dict[str, Any]]:
+        """Extract all data from a table."""
+        try:
+            if not self.connect():
+                return []
+            
+            query = f"SELECT * FROM {table_name}"
+            return self.execute_query(query)
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting table {table_name}: {str(e)}")
+            return []
 
 class APIConnector(BaseConnector):
-    """API connector for REST, GraphQL, and SOAP APIs."""
+    """API connector for REST/GraphQL APIs."""
     
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
-        self.api_type = config.get("type", "rest")
-        self.base_url = config.get("base_url")
+        self.base_url = config.get("base_url", "")
         self.headers = config.get("headers", {})
-        self.auth = config.get("authentication", {})
+        self.auth = config.get("auth")
     
     def connect(self) -> bool:
-        """Connect to API (validate endpoint)."""
+        """Test API connection."""
         try:
+            import requests
             response = requests.get(f"{self.base_url}/health", headers=self.headers, timeout=10)
             return response.status_code == 200
         except Exception as e:
@@ -179,121 +219,25 @@ class APIConnector(BaseConnector):
             return False
     
     def disconnect(self):
-        """Disconnect from API (no persistent connection)."""
-        self.logger.info("Disconnected from API")
+        """No persistent connection for APIs."""
+        pass
     
     def test_connection(self) -> bool:
         """Test API connection."""
         return self.connect()
     
-    def get_schema(self) -> Dict[str, Any]:
-        """Get API schema information."""
+    def get_data(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Get data from API endpoint."""
         try:
-            if self.api_type == "rest":
-                # Try to get OpenAPI/Swagger spec
-                response = requests.get(f"{self.base_url}/openapi.json", headers=self.headers)
-                if response.status_code == 200:
-                    return response.json()
-                else:
-                    return {"endpoints": [], "type": "rest"}
-            else:
-                return {"type": self.api_type}
+            import requests
+            response = requests.get(
+                f"{self.base_url}/{endpoint}",
+                headers=self.headers,
+                params=params,
+                timeout=30
+            )
+            response.raise_for_status()
+            return response.json()
         except Exception as e:
-            self.logger.error(f"Failed to get API schema: {str(e)}")
-            return {}
-
-class StorageConnector(BaseConnector):
-    """Storage connector for cloud and local storage."""
-    
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.storage_type = config.get("type", "s3")
-        self.bucket = config.get("bucket")
-        self.credentials = config.get("credentials", {})
-        self.client = None
-    
-    def connect(self) -> bool:
-        """Connect to storage."""
-        try:
-            if self.storage_type == "s3":
-                # Use only access key and secret key (no session token)
-                connection_params = {
-                    'aws_access_key_id': self.config.get("access_key"),
-                    'aws_secret_access_key': self.config.get("secret_key"),
-                    'region_name': self.config.get("region", "us-east-1")
-                }
-                
-                self.client = boto3.client('s3', **connection_params)
-            elif self.storage_type == "azure":
-                if BlobServiceClient is None:
-                    raise ImportError("azure-storage-blob package is required for Azure storage")
-                self.client = BlobServiceClient.from_connection_string(
-                    self.credentials.get("connection_string")
-                )
-            elif self.storage_type == "gcs":
-                self.client = storage.Client.from_service_account_json(
-                    self.credentials.get("service_account_file")
-                )
-            else:
-                raise ValueError(f"Unsupported storage type: {self.storage_type}")
-            
-            self.logger.info(f"Connected to {self.storage_type} storage")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to connect to storage: {str(e)}")
-            return False
-    
-    def disconnect(self):
-        """Disconnect from storage."""
-        self.client = None
-        self.logger.info("Disconnected from storage")
-    
-    def test_connection(self) -> bool:
-        """Test storage connection."""
-        try:
-            # First ensure we're connected
-            if not self.connect():
-                return False
-                
-            if self.storage_type == "s3":
-                bucket_name = self.config.get("bucket", self.bucket)
-                self.client.head_bucket(Bucket=bucket_name)
-                return True
-            elif self.storage_type == "azure":
-                container_client = self.client.get_container_client(self.bucket)
-                container_client.get_container_properties()
-                return True
-            elif self.storage_type == "gcs":
-                bucket = self.client.bucket(self.bucket)
-                bucket.exists()
-                return True
-            else:
-                return False
-        except Exception as e:
-            self.logger.error(f"Storage connection test failed: {str(e)}")
-            return False
-    
-    def get_schema(self) -> Dict[str, Any]:
-        """Get storage schema (file listing)."""
-        try:
-            if self.storage_type == "s3":
-                bucket_name = self.config.get("bucket", self.bucket)
-                response = self.client.list_objects_v2(Bucket=bucket_name)
-                files = [obj["Key"] for obj in response.get("Contents", [])]
-                return {"files": files, "type": "s3"}
-            elif self.storage_type == "azure":
-                container_client = self.client.get_container_client(self.bucket)
-                blobs = container_client.list_blobs()
-                files = [blob.name for blob in blobs]
-                return {"files": files, "type": "azure"}
-            elif self.storage_type == "gcs":
-                bucket = self.client.bucket(self.bucket)
-                blobs = bucket.list_blobs()
-                files = [blob.name for blob in blobs]
-                return {"files": files, "type": "gcs"}
-            else:
-                return {"type": self.storage_type}
-        except Exception as e:
-            self.logger.error(f"Failed to get storage schema: {str(e)}")
-            return {}
+            self.logger.error(f"Error getting data from API: {str(e)}")
+            return []

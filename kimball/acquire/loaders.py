@@ -1,28 +1,23 @@
 """
 KIMBALL Data Loaders
 
-This module provides data loading functionality for bronze layer:
-- ClickHouse data loading with optimization
-- Batch processing and error handling
-- Data validation and quality checks
-- Loading performance monitoring
+This module provides simplified data loading functionality.
+The new bucket processor handles most loading operations.
 """
 
 from typing import Dict, List, Any, Optional
-import pandas as pd
 from datetime import datetime
 import uuid
-import json
 
 from ..core.database import DatabaseManager
 from ..core.logger import Logger
 
 class BronzeLoader:
     """
-    Bronze layer data loader for ClickHouse.
+    Simplified bronze layer data loader for ClickHouse.
     
-    Provides optimized loading of raw data into bronze layer
-    with minimal transformation and maximum performance.
+    This is kept for backward compatibility with SQL query and table data extractions.
+    Storage data now uses the new bucket processor architecture.
     """
     
     def __init__(self):
@@ -31,14 +26,15 @@ class BronzeLoader:
         self.db_manager = DatabaseManager()
         self.loads = {}
     
-    def load_data(self, extraction_id: str, target_table: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    def load_data(self, data: List[Dict[str, Any]], target_table: str, source_id: str, extraction_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Load extracted data into bronze layer.
         
         Args:
-            extraction_id (str): ID of the extraction to load
+            data (List[Dict[str, Any]]): Data to load
             target_table (str): Target table name in bronze layer
-            config (Dict[str, Any]): Loading configuration
+            source_id (str): Source ID for metadata
+            extraction_id (Optional[str]): Extraction ID for tracking
             
         Returns:
             Dict[str, Any]: Loading result
@@ -49,14 +45,11 @@ class BronzeLoader:
             # Generate load ID
             load_id = f"load_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
             
-            # Get extraction data (in production, this would retrieve from extraction store)
-            extraction_data = self._get_extraction_data(extraction_id)
-            
-            if not extraction_data:
-                raise ValueError(f"Extraction data not found: {extraction_id}")
+            if not data:
+                raise ValueError("No data provided for loading")
             
             # Prepare data for loading
-            prepared_data = self._prepare_data_for_loading(extraction_data, config)
+            prepared_data = self._prepare_data_for_loading(data, source_id)
             
             # Create table if it doesn't exist
             self._ensure_table_exists(target_table, prepared_data["schema"])
@@ -65,14 +58,14 @@ class BronzeLoader:
             load_result = self._load_data_in_batches(
                 target_table, 
                 prepared_data["data"], 
-                config
+                {"batch_size": 1000}
             )
             
             # Store load result
             self.loads[load_id] = {
                 "extraction_id": extraction_id,
+                "source_id": source_id,
                 "target_table": target_table,
-                "config": config,
                 "result": load_result,
                 "timestamp": datetime.now().isoformat(),
                 "status": "completed"
@@ -91,33 +84,20 @@ class BronzeLoader:
             self.logger.error(f"Error loading data: {str(e)}")
             raise
     
-    def _get_extraction_data(self, extraction_id: str) -> Optional[Dict[str, Any]]:
-        """Get extraction data by ID."""
-        # In production, this would retrieve from extraction store
-        # For now, return mock data
-        return {
-            "data": [],
-            "record_count": 0,
-            "columns": [],
-            "extraction_type": "mock"
-        }
-    
-    def _prepare_data_for_loading(self, extraction_data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    def _prepare_data_for_loading(self, data: List[Dict[str, Any]], source_id: str) -> Dict[str, Any]:
         """Prepare data for loading into ClickHouse."""
         try:
-            data = extraction_data.get("data", [])
-            
             if not data:
                 return {"data": [], "schema": {}}
             
             # Convert to DataFrame for easier manipulation
+            import pandas as pd
             df = pd.DataFrame(data)
             
-            # Apply any required transformations
-            if "transformations" in config:
-                df = self._apply_loading_transformations(df, config["transformations"])
+            # Apply loading transformations
+            df = self._apply_loading_transformations(df, {"source_id": source_id})
             
-            # Infer ClickHouse schema
+            # Infer ClickHouse schema - all columns as String
             schema = self._infer_clickhouse_schema(df)
             
             # Convert DataFrame back to list of dictionaries
@@ -133,17 +113,13 @@ class BronzeLoader:
             self.logger.error(f"Error preparing data: {str(e)}")
             raise
     
-    def _apply_loading_transformations(self, df: pd.DataFrame, transformations: Dict[str, Any]) -> pd.DataFrame:
+    def _apply_loading_transformations(self, df, transformations: Dict[str, Any]):
         """Apply transformations specific to loading."""
         try:
             # Handle null values for ClickHouse compatibility
             if transformations.get("handle_nulls", True):
                 # Replace NaN with None for ClickHouse
                 df = df.where(pd.notnull(df), None)
-            
-            # Convert data types for ClickHouse
-            if transformations.get("convert_types", True):
-                df = self._convert_types_for_clickhouse(df)
             
             # Add metadata columns
             if transformations.get("add_metadata", True):
@@ -157,43 +133,15 @@ class BronzeLoader:
             self.logger.error(f"Error applying loading transformations: {str(e)}")
             return df
     
-    def _convert_types_for_clickhouse(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Convert pandas types to ClickHouse-compatible types."""
-        try:
-            for column in df.columns:
-                if df[column].dtype == 'object':
-                    # Try to convert to numeric if possible
-                    try:
-                        df[column] = pd.to_numeric(df[column], errors='ignore')
-                    except:
-                        pass
-                
-                # Convert datetime columns
-                if df[column].dtype == 'datetime64[ns]':
-                    df[column] = df[column].dt.strftime('%Y-%m-%d %H:%M:%S')
-            
-            return df
-            
-        except Exception as e:
-            self.logger.error(f"Error converting types: {str(e)}")
-            return df
-    
-    def _infer_clickhouse_schema(self, df: pd.DataFrame) -> Dict[str, str]:
-        """Infer ClickHouse schema from DataFrame."""
+    def _infer_clickhouse_schema(self, df) -> Dict[str, str]:
+        """Infer ClickHouse schema from DataFrame - all columns as String."""
         try:
             schema = {}
             
-            for column, dtype in df.dtypes.items():
-                if dtype == 'int64':
-                    schema[column] = 'Int64'
-                elif dtype == 'float64':
-                    schema[column] = 'Float64'
-                elif dtype == 'bool':
-                    schema[column] = 'UInt8'
-                elif dtype == 'datetime64[ns]':
-                    schema[column] = 'DateTime'
-                else:
-                    schema[column] = 'String'
+            # For now, make all columns String type to avoid ClickHouse errors
+            # Later in bronze discovery phase, we'll determine true data types
+            for column in df.columns:
+                schema[column] = 'String'
             
             return schema
             
@@ -207,6 +155,11 @@ class BronzeLoader:
             # Check if table exists
             tables = self.db_manager.get_tables()
             
+            # Handle case where get_tables returns None
+            if tables is None:
+                self.logger.warning("Could not retrieve table list, assuming table doesn't exist")
+                tables = []
+            
             if table_name not in tables:
                 # Create table
                 self.logger.info(f"Creating table: {table_name}")
@@ -219,7 +172,7 @@ class BronzeLoader:
                 existing_schema = self.db_manager.get_table_schema(table_name)
                 if existing_schema:
                     self._validate_schema_match(schema, existing_schema)
-            
+                    
         except Exception as e:
             self.logger.error(f"Error ensuring table exists: {str(e)}")
             raise
@@ -229,84 +182,71 @@ class BronzeLoader:
         try:
             existing_columns = {col["name"]: col["type"] for col in existing_schema}
             
-            for column, expected_type in expected_schema.items():
-                if column in existing_columns:
-                    existing_type = existing_columns[column]
-                    if not self._types_compatible(expected_type, existing_type):
-                        self.logger.warning(f"Type mismatch for column {column}: expected {expected_type}, found {existing_type}")
-                else:
-                    self.logger.warning(f"Missing column in existing table: {column}")
-            
+            for col_name, col_type in expected_schema.items():
+                if col_name not in existing_columns:
+                    self.logger.warning(f"Column {col_name} missing in existing table")
+                elif existing_columns[col_name] != col_type:
+                    self.logger.warning(f"Column {col_name} type mismatch: expected {col_type}, got {existing_columns[col_name]}")
+                    
         except Exception as e:
-            self.logger.error(f"Error validating schema: {str(e)}")
+            self.logger.error(f"Error validating schema match: {str(e)}")
     
-    def _types_compatible(self, type1: str, type2: str) -> bool:
-        """Check if two ClickHouse types are compatible."""
-        # Simple compatibility check
-        compatible_groups = [
-            ['Int8', 'Int16', 'Int32', 'Int64'],
-            ['Float32', 'Float64'],
-            ['String', 'FixedString']
-        ]
-        
-        for group in compatible_groups:
-            if type1 in group and type2 in group:
-                return True
-        
-        return type1 == type2
-    
-    def _load_data_in_batches(self, table_name: str, data: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str, Any]:
-        """Load data in batches for better performance."""
+    def _load_data_in_batches(self, table_name: str, data: List[Dict[str, Any]], options: Dict[str, Any]) -> Dict[str, Any]:
+        """Load data in batches."""
         try:
-            batch_size = config.get("batch_size", 1000)
+            batch_size = options.get("batch_size", 1000)
             total_records = len(data)
-            loaded_records = 0
             
-            # Process data in batches
+            if total_records == 0:
+                return {"record_count": 0, "batches_loaded": 0}
+            
+            batches_loaded = 0
+            
             for i in range(0, total_records, batch_size):
                 batch = data[i:i + batch_size]
-                
-                # Convert batch to DataFrame
-                batch_df = pd.DataFrame(batch)
-                
-                # Load batch to ClickHouse
-                success = self._load_batch_to_clickhouse(table_name, batch_df)
-                
-                if success:
-                    loaded_records += len(batch)
-                    self.logger.info(f"Loaded batch {i//batch_size + 1}: {len(batch)} records")
-                else:
-                    self.logger.error(f"Failed to load batch {i//batch_size + 1}")
+                self._insert_batch(table_name, batch)
+                batches_loaded += 1
+                self.logger.info(f"Loaded batch {batches_loaded}: {len(batch)} records")
             
             return {
-                "record_count": loaded_records,
-                "total_records": total_records,
-                "batches_processed": (total_records + batch_size - 1) // batch_size
+                "record_count": total_records,
+                "batches_loaded": batches_loaded
             }
             
         except Exception as e:
             self.logger.error(f"Error loading data in batches: {str(e)}")
             raise
     
-    def _load_batch_to_clickhouse(self, table_name: str, batch_df: pd.DataFrame) -> bool:
-        """Load a single batch to ClickHouse."""
+    def _insert_batch(self, table_name: str, batch: List[Dict[str, Any]]):
+        """Insert a batch of records to ClickHouse."""
         try:
-            # In production, this would use ClickHouse client to insert data
-            # For now, simulate successful loading
-            self.logger.debug(f"Loading {len(batch_df)} records to {table_name}")
-            return True
+            if not batch:
+                return
+            
+            # Get column names from first record
+            columns = list(batch[0].keys())
+            
+            # Build INSERT statement
+            columns_str = ', '.join([f"`{col}`" for col in columns])
+            
+            # Prepare values for INSERT
+            values_list = []
+            for record in batch:
+                # Convert all values to strings and escape single quotes
+                row_values = []
+                for col in columns:
+                    value = str(record.get(col, ""))
+                    # Escape single quotes for SQL
+                    value = value.replace("'", "''")
+                    row_values.append(f"'{value}'")
+                values_list.append(f"({', '.join(row_values)})")
+            
+            # Build INSERT statement
+            insert_sql = f"INSERT INTO {table_name} ({columns_str}) VALUES {', '.join(values_list)}"
+            
+            # Execute INSERT
+            self.db_manager.execute_query(insert_sql)
             
         except Exception as e:
-            self.logger.error(f"Error loading batch to ClickHouse: {str(e)}")
-            return False
-    
-    def get_load_status(self, load_id: str) -> Dict[str, Any]:
-        """Get status of a load operation."""
-        if load_id in self.loads:
-            return self.loads[load_id]
-        else:
-            return {"error": "Load not found"}
-    
-    def list_loads(self) -> List[Dict[str, Any]]:
-        """List all load operations."""
-        return list(self.loads.values())
+            self.logger.error(f"Error inserting batch to {table_name}: {str(e)}")
+            raise

@@ -16,7 +16,7 @@ from .logger import Logger
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-from connection import get_clickhouse_connection
+import clickhouse_connect
 
 class DatabaseManager:
     """
@@ -44,7 +44,18 @@ class DatabaseManager:
         try:
             if connection_type == "clickhouse":
                 if "clickhouse" not in self.connections:
-                    self.connections["clickhouse"] = get_clickhouse_connection()
+                    # Get ClickHouse configuration
+                    config = self.config.get_config()
+                    clickhouse_config = config.get("clickhouse", {})
+                    
+                    # Create ClickHouse connection
+                    self.connections["clickhouse"] = clickhouse_connect.get_client(
+                        host=clickhouse_config.get("host", "localhost"),
+                        port=clickhouse_config.get("port", 8123),
+                        username=clickhouse_config.get("username", "default"),
+                        password=clickhouse_config.get("password", ""),
+                        database=clickhouse_config.get("database", "default")
+                    )
                 return self.connections["clickhouse"]
             else:
                 raise ValueError(f"Unsupported connection type: {connection_type}")
@@ -65,12 +76,13 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection(connection_type)
-            if conn.connect():
-                conn.disconnect()
+            if connection_type == "clickhouse":
+                # Test ClickHouse connection
+                result = conn.command("SELECT 1")
                 self.logger.info(f"Connection test successful for {connection_type}")
                 return True
             else:
-                self.logger.error(f"Connection test failed for {connection_type}")
+                self.logger.error(f"Unsupported connection type for testing: {connection_type}")
                 return False
         except Exception as e:
             self.logger.error(f"Connection test error: {str(e)}")
@@ -89,15 +101,24 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection(connection_type)
-            if not conn.connect():
-                self.logger.error("Failed to connect to database")
+            if connection_type == "clickhouse":
+                # Execute ClickHouse query
+                result = conn.query(query)
+                
+                # Convert result to list of dictionaries
+                if result.result_rows:
+                    columns = list(result.column_names)  # column_names is already a tuple of strings
+                    rows = []
+                    for row in result.result_rows:
+                        rows.append(dict(zip(columns, row)))
+                    return rows
+                else:
+                    return []
+            else:
+                self.logger.error(f"Unsupported connection type for query: {connection_type}")
                 return None
             
-            result = conn.execute_query(query)
-            conn.disconnect()
-            
             self.logger.info(f"Query executed successfully: {query[:100]}...")
-            return result
             
         except Exception as e:
             self.logger.error(f"Query execution error: {str(e)}")
@@ -116,15 +137,19 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection(connection_type)
-            if not conn.connect():
+            if connection_type == "clickhouse":
+                # Get ClickHouse tables
+                result = conn.query("SHOW TABLES")
+                if result.result_rows:
+                    tables = [row[0] for row in result.result_rows]
+                    self.logger.info(f"Retrieved {len(tables)} tables from ClickHouse")
+                    return tables
+                else:
+                    return []
+            else:
+                self.logger.error(f"Unsupported connection type for get_tables: {connection_type}")
                 return None
-            
-            tables = conn.get_tables()
-            conn.disconnect()
-            
-            self.logger.info(f"Retrieved {len(tables) if tables else 0} tables from {schema}")
-            return tables
-            
+                
         except Exception as e:
             self.logger.error(f"Error getting tables: {str(e)}")
             return None
