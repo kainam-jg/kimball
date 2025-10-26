@@ -49,6 +49,15 @@ class ColumnAnalysisRequest(BaseModel):
     column_name: str
     sample_size: int = 100
 
+class MetadataEditRequest(BaseModel):
+    """Request model for editing metadata."""
+    original_table_name: str
+    original_column_name: str
+    new_table_name: Optional[str] = None
+    new_column_name: Optional[str] = None
+    inferred_type: Optional[str] = None
+    classification: Optional[str] = None
+
 # Data type inference patterns
 DATA_TYPE_PATTERNS = {
     'integer': [
@@ -158,7 +167,7 @@ class FactDimensionClassifier:
         
         # Initialize classification factors
         factors = {
-            "is_numeric": data_type in ['integer', 'decimal'],
+            "is_numeric": data_type in ['integer', 'decimal', 'numeric'],
             "is_date": data_type in ['date', 'datetime'],
             "is_boolean": data_type == 'boolean',
             "is_identifier": _is_identifier_column(column_name),
@@ -171,14 +180,16 @@ class FactDimensionClassifier:
         classification = "dimension"  # Default to dimension
         reasoning = []
         
-        # Fact indicators (measures)
-        if factors["is_numeric"] and factors["high_cardinality"]:
+        # Fact indicators (measures) - Numeric types should default to fact
+        if factors["is_numeric"]:
             classification = "fact"
-            reasoning.append("Numeric column with high cardinality (likely measure)")
-        
-        if factors["is_numeric"] and _is_measure_column(column_name):
-            classification = "fact"
-            reasoning.append("Column name suggests measure (amount, cost, quantity, etc.)")
+            reasoning.append("Numeric data type (typically a measure/fact)")
+            
+            if factors["high_cardinality"]:
+                reasoning.append("High cardinality confirms measure classification")
+            
+            if _is_measure_column(column_name):
+                reasoning.append("Column name suggests measure (amount, cost, quantity, etc.)")
         
         # Dimension indicators (attributes)
         if factors["is_date"]:
@@ -697,6 +708,460 @@ async def learn_from_correction(correction_data: dict):
         
     except Exception as e:
         logger.error(f"Error learning from correction: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+@discover_router.post("/store/discover-metadata")
+async def store_discover_metadata(request: DiscoveryRequest):
+    """Store Discovery phase results in the metadata.discover table."""
+    try:
+        db_manager = DatabaseManager()
+        
+        # Perform schema analysis to get the data
+        schema_analysis = await analyze_bronze_schema(request)
+        
+        # Prepare data for insertion
+        metadata_records = []
+        analysis_timestamp = datetime.now()
+        
+        for table_name, table_data in schema_analysis["tables"].items():
+            if "error" in table_data:
+                continue  # Skip tables with errors
+                
+            for column_data in table_data.get("columns", []):
+                # Convert sample_values list to string for storage
+                sample_values_str = json.dumps(column_data.get("sample_values", []))
+                classification_reasoning_str = json.dumps(column_data.get("classification_reasoning", []))
+                
+                # Generate version based on timestamp for upsert functionality
+                version = int(analysis_timestamp.timestamp() * 1000000)  # Microsecond precision
+                
+                record = {
+                    "original_table_name": table_name,
+                    "new_table_name": table_name,  # Initially same as original
+                    "original_column_name": column_data["name"],
+                    "new_column_name": column_data["name"],  # Initially same as original
+                    "bronze_type": column_data["bronze_type"],
+                    "inferred_type": column_data["inferred_type"],
+                    "type_confidence": column_data["type_confidence"],
+                    "pattern_matched": column_data.get("pattern", ""),
+                    "reasoning": column_data.get("reasoning", ""),
+                    "cardinality": column_data["cardinality"],
+                    "null_count": column_data["null_count"],
+                    "null_percentage": column_data["null_percentage"],
+                    "classification": column_data["classification"],
+                    "classification_confidence": column_data["classification_confidence"],
+                    "classification_reasoning": classification_reasoning_str,
+                    "is_primary_key_candidate": 1 if column_data["is_primary_key_candidate"] else 0,
+                    "data_quality_score": column_data["data_quality_score"],
+                    "cardinality_ratio": column_data["cardinality_ratio"],
+                    "sample_values": sample_values_str,
+                    "analysis_timestamp": analysis_timestamp,
+                    "version": version
+                }
+                metadata_records.append(record)
+        
+        # Ensure the metadata.discover table exists
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS metadata.discover (
+            original_table_name String,
+            new_table_name String,
+            original_column_name String,
+            new_column_name String,
+            bronze_type String,
+            inferred_type String,
+            type_confidence Float64,
+            pattern_matched String,
+            reasoning String,
+            cardinality UInt64,
+            null_count UInt64,
+            null_percentage Float64,
+            classification String,
+            classification_confidence Float64,
+            classification_reasoning String,
+            is_primary_key_candidate UInt8,
+            data_quality_score Float64,
+            cardinality_ratio Float64,
+            sample_values String,
+            analysis_timestamp DateTime,
+            created_at DateTime DEFAULT now(),
+            version UInt64 DEFAULT 1
+        ) ENGINE = ReplacingMergeTree(version)
+        ORDER BY (original_table_name, original_column_name)
+        """
+        
+        logger.info("Creating metadata.discover table if it doesn't exist...")
+        db_manager.execute_query(create_table_sql)
+        
+        # Insert records into metadata.discover table
+        if metadata_records:
+            insert_count = 0
+            for record in metadata_records:
+                # Build INSERT query
+                columns = list(record.keys())
+                values = list(record.values())
+                
+                # Convert values to proper format for ClickHouse
+                formatted_values = []
+                for value in values:
+                    if isinstance(value, str):
+                        # Escape single quotes by replacing them
+                        escaped_value = value.replace("'", "''")
+                        formatted_values.append(f"'{escaped_value}'")
+                    elif isinstance(value, datetime):
+                        formatted_values.append(f"'{value.strftime('%Y-%m-%d %H:%M:%S')}'")
+                    else:
+                        formatted_values.append(str(value))
+                
+                insert_query = f"""
+                INSERT INTO metadata.discover ({', '.join(columns)})
+                VALUES ({', '.join(formatted_values)})
+                """
+                
+                try:
+                    db_manager.execute_query(insert_query)
+                    insert_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to insert metadata record for {record['table_name']}.{record['column_name']}: {e}")
+                    continue
+        
+        return {
+            "status": "success",
+            "message": f"Stored {insert_count} metadata records in metadata.discover",
+            "total_records": len(metadata_records),
+            "inserted_records": insert_count,
+            "analysis_timestamp": analysis_timestamp.isoformat(),
+            "tables_analyzed": len(schema_analysis["tables"])
+        }
+        
+    except Exception as e:
+        logger.error(f"Error storing discover metadata: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@discover_router.get("/query/discover-metadata")
+async def query_discover_metadata(
+    table_name: Optional[str] = None,
+    column_name: Optional[str] = None,
+    inferred_type: Optional[str] = None,
+    limit: int = 100
+):
+    """Query the discover metadata table with optional filters."""
+    try:
+        db_manager = DatabaseManager()
+        
+        # Build query with optional filters
+        where_conditions = []
+        if table_name:
+            where_conditions.append(f"table_name = '{table_name}'")
+        if column_name:
+            where_conditions.append(f"original_column_name = '{column_name}'")
+        if inferred_type:
+            where_conditions.append(f"inferred_type = '{inferred_type}'")
+        
+        where_clause = ""
+        if where_conditions:
+            where_clause = f"WHERE {' AND '.join(where_conditions)}"
+        
+        query = f"""
+        SELECT 
+            table_name,
+            original_column_name,
+            new_column_name,
+            bronze_type,
+            inferred_type,
+            type_confidence,
+            pattern_matched,
+            reasoning,
+            cardinality,
+            null_count,
+            null_percentage,
+            classification,
+            classification_confidence,
+            data_quality_score,
+            cardinality_ratio,
+            sample_values,
+            analysis_timestamp,
+            created_at,
+            version
+        FROM metadata.discover
+        {where_clause}
+        ORDER BY analysis_timestamp DESC, table_name, original_column_name
+        LIMIT {limit}
+        """
+        
+        results = db_manager.execute_query(query)
+        
+        return {
+            "status": "success",
+            "query": query,
+            "results": results,
+            "count": len(results)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error querying discover metadata: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@discover_router.get("/metadata")
+async def get_discover_metadata(
+    table_name: Optional[str] = None,
+    limit: int = 100
+):
+    """Get discovery metadata for all tables or a specific table."""
+    try:
+        db_manager = DatabaseManager()
+        
+        # Build query with optional table filter
+        where_clause = ""
+        if table_name:
+            where_clause = f"WHERE original_table_name = '{table_name}'"
+        
+        query = f"""
+        SELECT 
+            original_table_name,
+            new_table_name,
+            original_column_name,
+            new_column_name,
+            bronze_type,
+            inferred_type,
+            type_confidence,
+            pattern_matched,
+            reasoning,
+            cardinality,
+            null_count,
+            null_percentage,
+            classification,
+            classification_confidence,
+            data_quality_score,
+            cardinality_ratio,
+            sample_values,
+            analysis_timestamp,
+            created_at,
+            version
+        FROM metadata.discover
+        {where_clause}
+        ORDER BY original_table_name, original_column_name
+        LIMIT {limit}
+        """
+        
+        results = db_manager.execute_query(query)
+        
+        # Group results by table for better organization
+        tables_metadata = {}
+        if results:
+            for row in results:
+                table_name_key = row["original_table_name"]
+                if table_name_key not in tables_metadata:
+                    tables_metadata[table_name_key] = []
+                tables_metadata[table_name_key].append(row)
+        
+        return {
+            "status": "success",
+            "query": query,
+            "tables": tables_metadata,
+            "total_records": len(results) if results else 0,
+            "table_count": len(tables_metadata)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting discover metadata: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@discover_router.put("/metadata/edit")
+async def edit_discover_metadata(request: MetadataEditRequest):
+    """
+    Edit discovery metadata for a specific column.
+    
+    IMPORTANT: If new_table_name is provided, it updates the table name for ALL columns
+    in that table, not just the specified column. This ensures consistency across the table.
+    
+    Args:
+        request: MetadataEditRequest containing:
+            - original_table_name: The original table name to identify the table
+            - original_column_name: The original column name to identify the column
+            - new_table_name: Optional new table name (updates ALL columns in table)
+            - new_column_name: Optional new column name (updates only this column)
+            - inferred_type: Optional new inferred data type
+            - classification: Optional new fact/dimension classification
+    
+    Returns:
+        Success message with updated fields and new version number
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # Validate that at least one field is being updated
+        if not any([request.new_table_name, request.new_column_name, request.inferred_type, request.classification]):
+            raise HTTPException(
+                status_code=400, 
+                detail="At least one field must be provided for update (new_table_name, new_column_name, inferred_type, or classification)"
+            )
+        
+        # Generate new version for upsert functionality (ClickHouse ReplacingMergeTree)
+        new_version = int(datetime.now().timestamp() * 1000000)
+        
+        # Build update fields tracking for response
+        update_fields = []
+        update_values = []
+        
+        if request.new_table_name is not None:
+            update_fields.append("new_table_name")
+            update_values.append(f"'{request.new_table_name}'")
+        
+        if request.new_column_name is not None:
+            update_fields.append("new_column_name")
+            update_values.append(f"'{request.new_column_name}'")
+        
+        if request.inferred_type is not None:
+            update_fields.append("inferred_type")
+            update_values.append(f"'{request.inferred_type}'")
+        
+        if request.classification is not None:
+            update_fields.append("classification")
+            update_values.append(f"'{request.classification}'")
+        
+        # Always update version and analysis_timestamp for upsert functionality
+        update_fields.extend(["version", "analysis_timestamp"])
+        update_values.extend([str(new_version), f"'{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}'"])
+        
+        # Build INSERT query for upsert (ReplacingMergeTree will handle the replacement)
+        # CRITICAL: If updating table name, update ALL columns for that table to maintain consistency
+        if request.new_table_name is not None:
+            # Update all columns for the table
+            # This ensures that when a table name changes, ALL columns in that table get the new name
+            insert_query = f"""
+            INSERT INTO metadata.discover (
+                original_table_name,
+                new_table_name,
+                original_column_name,
+                new_column_name,
+                bronze_type,
+                inferred_type,
+                type_confidence,
+                pattern_matched,
+                reasoning,
+                cardinality,
+                null_count,
+                null_percentage,
+                classification,
+                classification_confidence,
+                classification_reasoning,
+                is_primary_key_candidate,
+                data_quality_score,
+                cardinality_ratio,
+                sample_values,
+                analysis_timestamp,
+                version
+            )
+            SELECT 
+                original_table_name,
+                '{request.new_table_name}',  -- Update table name for ALL columns
+                original_column_name,
+                CASE 
+                    WHEN original_column_name = '{request.original_column_name}' 
+                    THEN {f"'{request.new_column_name}'" if request.new_column_name is not None else f"'{request.original_column_name}'"}
+                    ELSE new_column_name 
+                END,
+                bronze_type,
+                CASE 
+                    WHEN original_column_name = '{request.original_column_name}' 
+                    THEN {f"'{request.inferred_type}'" if request.inferred_type is not None else 'inferred_type'}
+                    ELSE inferred_type 
+                END,
+                type_confidence,
+                pattern_matched,
+                reasoning,
+                cardinality,
+                null_count,
+                null_percentage,
+                CASE 
+                    WHEN original_column_name = '{request.original_column_name}' 
+                    THEN {f"'{request.classification}'" if request.classification is not None else 'classification'}
+                    ELSE classification 
+                END,
+                classification_confidence,
+                classification_reasoning,
+                is_primary_key_candidate,
+                data_quality_score,
+                cardinality_ratio,
+                sample_values,
+                '{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}',
+                {new_version}
+            FROM metadata.discover
+            WHERE original_table_name = '{request.original_table_name}'  -- Update ALL columns for this table
+            """
+        else:
+            # Update only the specific column (no table name change)
+            insert_query = f"""
+            INSERT INTO metadata.discover (
+                original_table_name,
+                new_table_name,
+                original_column_name,
+                new_column_name,
+                bronze_type,
+                inferred_type,
+                type_confidence,
+                pattern_matched,
+                reasoning,
+                cardinality,
+                null_count,
+                null_percentage,
+                classification,
+                classification_confidence,
+                classification_reasoning,
+                is_primary_key_candidate,
+                data_quality_score,
+                cardinality_ratio,
+                sample_values,
+                analysis_timestamp,
+                version
+            )
+            SELECT 
+                original_table_name,
+                new_table_name,
+                original_column_name,
+                {update_values[0] if request.new_column_name is not None else 'new_column_name'},
+                bronze_type,
+                {update_values[1] if request.inferred_type is not None else 'inferred_type'},
+                type_confidence,
+                pattern_matched,
+                reasoning,
+                cardinality,
+                null_count,
+                null_percentage,
+                {update_values[2] if request.classification is not None else 'classification'},
+                classification_confidence,
+                classification_reasoning,
+                is_primary_key_candidate,
+                data_quality_score,
+                cardinality_ratio,
+                sample_values,
+                '{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}',
+                {new_version}
+            FROM metadata.discover
+            WHERE original_table_name = '{request.original_table_name}' 
+            AND original_column_name = '{request.original_column_name}'
+            """
+        
+        # Execute the upsert
+        result = db_manager.execute_query(insert_query)
+        
+        # Determine the scope of the update
+        if request.new_table_name is not None:
+            message = f"Updated table name for all columns in {request.original_table_name} to {request.new_table_name}"
+            if any([request.new_column_name, request.inferred_type, request.classification]):
+                message += f" and updated specific fields for {request.original_column_name}"
+        else:
+            message = f"Updated metadata for {request.original_table_name}.{request.original_column_name}"
+        
+        return {
+            "status": "success",
+            "message": message,
+            "updated_fields": update_fields[:-2],  # Exclude version and timestamp
+            "new_version": new_version,
+            "query": insert_query
+        }
+        
+    except Exception as e:
+        logger.error(f"Error editing discover metadata: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 @discover_router.post("/export/metadata")
 async def export_metadata(request: DiscoveryRequest):

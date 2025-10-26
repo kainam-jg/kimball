@@ -30,6 +30,9 @@ KIMBALL follows a four-phase approach:
 - **Confidence Scoring**: Multi-factor confidence calculation with optimized thresholds (90%+ accuracy)
 - **Online Learning System**: Learns from user corrections to improve accuracy over time
 - **Performance Optimization**: Intelligent caching and smart sampling for efficiency
+- **Metadata Storage**: ClickHouse `metadata.discover` table with upsert functionality
+- **Editable Names**: Both table and column names can be customized while preserving originals
+- **Bulk Table Updates**: When table name changes, ALL columns in that table are updated automatically
 - **Automated metadata discovery** and catalog generation
 - **Data quality assessment** with intelligent scoring
 - **Relationship discovery** and join candidate identification
@@ -96,6 +99,59 @@ print(f"Type: {result.inferred_type}")        # Output: date
 print(f"Confidence: {result.confidence}")     # Output: 0.9
 print(f"Pattern: {result.pattern_matched}")   # Output: YYYYMMDD
 print(f"Reasoning: {result.reasoning}")       # Output: Detected YYYYMMDD date pattern with 0.90 confidence
+```
+
+## 🔄 Metadata Management & Editing System
+
+KIMBALL includes a comprehensive **Metadata Management & Editing System** that allows users to customize table and column names while preserving original values and maintaining data consistency.
+
+### **Key Features:**
+
+#### **Editable Names**
+- **Original vs. New Names**: Both table names and column names have `original_*` and `new_*` fields
+- **Preserve Originals**: Original names are never lost, allowing traceability back to source systems
+- **Custom Display Names**: Users can set friendly display names for better business understanding
+
+#### **Bulk Table Updates**
+- **Consistency Enforcement**: When a table name changes, ALL columns in that table are automatically updated
+- **Single Request Updates**: Update both table and column names in a single API call
+- **Version Control**: Microsecond-precision versioning ensures proper deduplication
+
+#### **Upsert Functionality**
+- **ClickHouse ReplacingMergeTree**: Prevents duplicate metadata records
+- **Automatic Deduplication**: Latest version is kept based on version numbers
+- **Performance Optimized**: Efficient upsert operations for large metadata sets
+
+### **API Endpoints:**
+- `GET /api/v1/discover/metadata` - Retrieve metadata with optional table filtering
+- `PUT /api/v1/discover/metadata/edit` - Edit metadata fields with bulk table name updates
+- `POST /api/v1/discover/store/discover-metadata` - Store discovery analysis results
+
+### **Usage Examples:**
+
+#### **Bulk Table Name Update:**
+```bash
+PUT /api/v1/discover/metadata/edit
+{
+  "original_table_name": "daily_sales",
+  "original_column_name": "amount_sales",
+  "new_table_name": "sales_transactions"
+}
+# Result: ALL columns in daily_sales get new_table_name = "sales_transactions"
+```
+
+#### **Combined Table + Column Updates:**
+```bash
+PUT /api/v1/discover/metadata/edit
+{
+  "original_table_name": "vehicles",
+  "original_column_name": "vehicle_class",
+  "new_table_name": "product_catalog",
+  "new_column_name": "product_category",
+  "classification": "dimension"
+}
+# Result: ALL columns get new_table_name = "product_catalog"
+#         AND vehicle_class gets new_column_name = "product_category"
 ```
 
 ## 🔄 Stream-Based Data Processing Architecture

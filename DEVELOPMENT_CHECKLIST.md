@@ -27,6 +27,14 @@
 - **Testing**: Thoroughly tested with real data from bronze layer
 - **Scalability**: Designed to handle large datasets efficiently
 
+### **🔄 METADATA MANAGEMENT FEATURES**
+- **Editable Table Names**: `original_table_name` and `new_table_name` fields
+- **Editable Column Names**: `original_column_name` and `new_column_name` fields
+- **Bulk Table Updates**: When table name changes, ALL columns in that table are updated automatically
+- **Upsert Functionality**: ClickHouse `ReplacingMergeTree` prevents duplicate metadata records
+- **Version Control**: Microsecond-precision versioning for proper deduplication
+- **Combined Updates**: Support for updating both table and column names in single request
+
 ## 🧠 **INTELLIGENT TYPE INFERENCE ARCHITECTURE**
 
 ### **Hybrid Detection Strategy**
