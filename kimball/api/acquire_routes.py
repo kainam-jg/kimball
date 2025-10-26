@@ -8,10 +8,28 @@ Currently only has the status endpoint for systematic testing.
 from fastapi import APIRouter, HTTPException
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+from pydantic import BaseModel
 
 from ..acquire.source_manager import DataSourceManager
 from ..core.logger import Logger
 from ..core.config import Config
+
+# Pydantic models for request bodies
+class DataSourceConfigRequest(BaseModel):
+    """Request model for creating a new data source."""
+    name: str
+    type: str  # postgres, s3, api
+    enabled: bool = True
+    description: Optional[str] = ""
+    config: Dict[str, Any]
+
+class DataSourceUpdateRequest(BaseModel):
+    """Request model for updating an existing data source."""
+    name: Optional[str] = None
+    type: Optional[str] = None
+    enabled: Optional[bool] = None
+    description: Optional[str] = None
+    config: Optional[Dict[str, Any]] = None
 
 # Initialize router
 acquire_router = APIRouter(prefix="/api/v1/acquire", tags=["Acquire"])
@@ -85,20 +103,184 @@ async def list_data_sources():
 #     """List all configured data sources."""
 #     pass
 
-# @acquire_router.get("/datasources/{source_id}")
-# async def get_data_source(source_id: str):
-#     """Get a specific data source configuration."""
-#     pass
+@acquire_router.get("/datasources/{source_id}")
+async def get_data_source(source_id: str):
+    """Get a specific data source configuration."""
+    try:
+        logger.log_api_call(f"/acquire/datasources/{source_id}", "GET")
+        
+        config_manager = Config()
+        config = config_manager.get_config()
+        data_sources = config.get("data_sources", {})
+        
+        if source_id not in data_sources:
+            raise HTTPException(status_code=404, detail=f"Data source '{source_id}' not found")
+        
+        source_config = data_sources[source_id]
+        
+        return {
+            "status": "success",
+            "source_id": source_id,
+            "source_config": source_config,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting data source {source_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-# @acquire_router.put("/datasources/{source_id}")
-# async def update_data_source(source_id: str, request: DataSourceUpdateRequest):
-#     """Update an existing data source configuration."""
-#     pass
+@acquire_router.put("/datasources/{source_id}")
+async def update_data_source(source_id: str, request: DataSourceUpdateRequest):
+    """Update an existing data source configuration."""
+    try:
+        logger.log_api_call(f"/acquire/datasources/{source_id}", "PUT", request_data=request.dict())
+        
+        config_manager = Config()
+        config = config_manager.get_config()
+        data_sources = config.get("data_sources", {})
+        
+        if source_id not in data_sources:
+            raise HTTPException(status_code=404, detail=f"Data source '{source_id}' not found")
+        
+        # Get existing configuration
+        existing_config = data_sources[source_id]
+        
+        # Update fields if provided
+        if request.name is not None:
+            # If renaming, check if new name already exists
+            if request.name != source_id and request.name in data_sources:
+                raise HTTPException(status_code=400, detail=f"Data source '{request.name}' already exists")
+            
+            # If renaming, remove old entry and add new one
+            if request.name != source_id:
+                del data_sources[source_id]
+                source_id = request.name
+        
+        if request.type is not None:
+            # Validate source type
+            valid_types = ["postgres", "s3", "api"]
+            if request.type not in valid_types:
+                raise HTTPException(status_code=400, detail=f"Invalid source type '{request.type}'. Must be one of: {valid_types}")
+            existing_config["type"] = request.type
+        
+        if request.enabled is not None:
+            existing_config["enabled"] = request.enabled
+        
+        if request.description is not None:
+            existing_config["description"] = request.description
+        
+        if request.config is not None:
+            # Merge config updates
+            existing_config.update(request.config)
+        
+        # Update the data source
+        data_sources[source_id] = existing_config
+        config["data_sources"] = data_sources
+        
+        # Save configuration
+        config_manager.save_config(config)
+        
+        return {
+            "status": "success",
+            "message": f"Data source '{source_id}' updated successfully",
+            "source_id": source_id,
+            "source_config": existing_config,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating data source {source_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-# @acquire_router.delete("/datasources/{source_id}")
-# async def delete_data_source(source_id: str):
-#     """Delete a data source configuration."""
-#     pass
+@acquire_router.delete("/datasources/{source_id}")
+async def delete_data_source(source_id: str):
+    """Delete a data source configuration."""
+    try:
+        logger.log_api_call(f"/acquire/datasources/{source_id}", "DELETE")
+        
+        config_manager = Config()
+        config = config_manager.get_config()
+        data_sources = config.get("data_sources", {})
+        
+        if source_id not in data_sources:
+            raise HTTPException(status_code=404, detail=f"Data source '{source_id}' not found")
+        
+        # Get the source config before deletion for response
+        source_config = data_sources[source_id]
+        
+        # Remove the data source
+        del data_sources[source_id]
+        config["data_sources"] = data_sources
+        
+        # Save configuration
+        config_manager.save_config(config)
+        
+        return {
+            "status": "success",
+            "message": f"Data source '{source_id}' deleted successfully",
+            "deleted_source_id": source_id,
+            "deleted_source_config": source_config,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting data source {source_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@acquire_router.post("/datasources")
+async def create_data_source(request: DataSourceConfigRequest):
+    """Create a new data source configuration."""
+    try:
+        logger.log_api_call("/acquire/datasources", "POST", request_data=request.dict())
+        
+        config_manager = Config()
+        config = config_manager.get_config()
+        data_sources = config.get("data_sources", {})
+        
+        # Check if data source already exists
+        if request.name in data_sources:
+            raise HTTPException(status_code=400, detail=f"Data source '{request.name}' already exists")
+        
+        # Validate source type
+        valid_types = ["postgres", "s3", "api"]
+        if request.type not in valid_types:
+            raise HTTPException(status_code=400, detail=f"Invalid source type '{request.type}'. Must be one of: {valid_types}")
+        
+        # Create new data source configuration
+        new_source = {
+            "type": request.type,
+            "enabled": request.enabled,
+            "description": request.description,
+            **request.config
+        }
+        
+        # Add to configuration
+        data_sources[request.name] = new_source
+        config["data_sources"] = data_sources
+        
+        # Save configuration
+        config_manager.save_config(config)
+        
+        return {
+            "status": "success",
+            "message": f"Data source '{request.name}' created successfully",
+            "source_name": request.name,
+            "source_type": request.type,
+            "enabled": request.enabled,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating data source: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @acquire_router.get("/test/{source_id}")
 async def test_data_source_connection(source_id: str):
