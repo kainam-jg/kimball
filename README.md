@@ -38,7 +38,7 @@ KIMBALL follows a four-phase approach:
 - **Relationship discovery** and join candidate identification
 - **Primary key detection** and foreign key mapping
 
-### 3. **Transformation Phase** 🔄 **IN PROGRESS**
+### 3. **Transformation Phase** ✅ **COMPLETE**
 - **ELT Architecture**: Extract, Load, Transform using ClickHouse UDFs
 - **Transformation Orchestration**: Automated UDF execution with dependency management
 - **Delta Lake Framework**: Standardized change data capture and versioning
@@ -46,6 +46,48 @@ KIMBALL follows a four-phase approach:
 - **Multi-Stage Processing**: Bronze → Silver → Gold with stage-specific transformations
 - **Rollback Capabilities**: Transaction-safe transformations with rollback support
 - **Monitoring & Logging**: Comprehensive transformation monitoring and audit trails
+
+### 4. **Model Phase** ✅ **COMPLETE**
+- **ERD Analysis**: Entity Relationship Diagram generation and analysis
+- **Hierarchy Discovery**: Dimensional hierarchy analysis with ROOT-to-LEAF progression
+- **Join Relationship Detection**: Automatic discovery of table relationships and foreign keys
+- **Fact vs Dimension Classification**: Intelligent classification of tables and columns
+- **Primary Key Detection**: Automated identification of primary key candidates
+- **Cross-Hierarchy Relationships**: Discovery of relationships between different hierarchies
+- **OLAP-Compliant Hierarchies**: Proper level-based hierarchy structures for dimensional modeling
+- **Metadata Storage**: ClickHouse `metadata.erd` and `metadata.hierarchies` tables
+- **Confidence Scoring**: Relationship confidence calculation for join recommendations
+- **Dimensional Modeling Support**: Foundation for star schema and data warehouse design
+
+#### **🔄 Model Phase Architecture**
+
+The Model Phase provides comprehensive ERD and hierarchy analysis for dimensional modeling:
+
+##### **ERD Analysis Components**
+- **Table Classification**: Automatic fact vs dimension table identification
+- **Column Analysis**: Data type inference, cardinality analysis, and quality scoring
+- **Primary Key Detection**: Identification of primary key candidates based on uniqueness and data quality
+- **Join Relationship Discovery**: Automatic detection of potential joins between tables
+- **Confidence Scoring**: Multi-factor confidence calculation for relationship recommendations
+
+##### **Hierarchy Analysis Components**
+- **ROOT-to-LEAF Progression**: Proper OLAP-compliant hierarchy structures
+- **Level-Based Organization**: Cardinality-based level assignment (lowest = ROOT, highest = LEAF)
+- **Parent-Child Relationships**: Automatic discovery of hierarchical relationships
+- **Sibling Detection**: Identification of columns at the same hierarchy level
+- **Cross-Hierarchy Analysis**: Discovery of relationships between different table hierarchies
+
+##### **Metadata Storage**
+- **`metadata.erd`**: Entity relationship metadata with table classifications and join relationships
+- **`metadata.hierarchies`**: Dimensional hierarchy metadata with level structures and relationships
+- **Upsert Functionality**: Automatic metadata updates with version control
+- **Query Optimization**: Indexed metadata tables for fast retrieval
+
+### 5. **Build Phase** 🔄 **COMING SOON**
+- **Pipeline Generation**: Automated data pipeline creation
+- **Orchestration**: Workflow management and scheduling
+- **Monitoring**: Real-time pipeline monitoring and alerting
+- **Deployment**: Production deployment automation
 
 #### **🔄 ELT Transformation Architecture**
 

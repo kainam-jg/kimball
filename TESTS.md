@@ -7,7 +7,7 @@ This document contains comprehensive CURL commands for testing all KIMBALL API e
 1. [Acquire Phase](#acquire-phase)
 2. [Discover Phase](#discover-phase)
 3. [Transformation Phase](#transformation-phase)
-4. [Model Phase](#model-phase-coming-soon)
+4. [Model Phase](#model-phase-active)
 5. [Build Phase](#build-phase-coming-soon)
 6. [General API Endpoints](#general-api-endpoints)
 7. [Testing Workflows](#testing-workflows)
@@ -406,37 +406,135 @@ curl -X POST "http://localhost:8000/api/v1/transformation/transformations/stage2
 
 ---
 
-## 🏗️ **Model Phase** (Coming Soon)
+## 🏗️ **Model Phase** ✅ **ACTIVE**
 
-### **ERD Generation**
+### **ERD Analysis**
+
+#### **Get Model Status**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/model/erd" \
+curl -X GET "http://localhost:8000/api/v1/model/status"
+```
+
+#### **Perform ERD Analysis**
+```bash
+curl -X POST "http://localhost:8000/api/v1/model/erd/analyze" \
   -H "Content-Type: application/json" \
   -d '{
     "schema_name": "silver",
-    "tables": ["sales_transactions_stage1", "dealer_regions_stage1"]
+    "include_relationships": true,
+    "min_confidence": 0.5
   }'
 ```
 
-### **Hierarchy Modeling**
+#### **Get ERD Metadata**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/model/hierarchies" \
+# Get all ERD metadata
+curl -X GET "http://localhost:8000/api/v1/model/erd/metadata"
+
+# Get ERD metadata for specific table
+curl -X GET "http://localhost:8000/api/v1/model/erd/metadata?table_name=sales_transactions_stage2"
+```
+
+#### **Get ERD Relationships**
+```bash
+curl -X GET "http://localhost:8000/api/v1/model/erd/relationships?min_confidence=0.7&limit=50"
+```
+
+### **Hierarchy Analysis**
+
+#### **Perform Hierarchy Analysis**
+```bash
+curl -X POST "http://localhost:8000/api/v1/model/hierarchies/analyze" \
   -H "Content-Type: application/json" \
   -d '{
-    "dimension_tables": ["dealer_regions_stage1", "product_catalog_stage1"],
-    "fact_tables": ["sales_transactions_stage1"]
+    "schema_name": "silver",
+    "include_cross_hierarchies": true,
+    "min_confidence": 0.5
   }'
 ```
 
-### **Star Schema Design**
+#### **Get Hierarchy Metadata**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/model/star-schema" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "fact_table": "sales_transactions_stage1",
-    "dimension_tables": ["dealer_regions_stage1", "product_catalog_stage1"]
-  }'
+# Get all hierarchy metadata
+curl -X GET "http://localhost:8000/api/v1/model/hierarchies/metadata"
+
+# Get hierarchy metadata for specific table
+curl -X GET "http://localhost:8000/api/v1/model/hierarchies/metadata?table_name=dealer_regions_stage2"
 ```
+
+#### **Get Hierarchy Levels**
+```bash
+# Get all hierarchy levels
+curl -X GET "http://localhost:8000/api/v1/model/hierarchies/levels"
+
+# Get hierarchy levels for specific table
+curl -X GET "http://localhost:8000/api/v1/model/hierarchies/levels?table_name=dealer_regions_stage2"
+```
+
+### **Comprehensive Analysis**
+
+#### **Perform Complete Model Analysis**
+```bash
+curl -X POST "http://localhost:8000/api/v1/model/analyze/all"
+```
+
+### **Expected Response Examples**
+
+#### **ERD Analysis Response**
+```json
+{
+  "status": "success",
+  "message": "ERD analysis completed",
+  "analysis_timestamp": "2025-10-27T09:06:06.397611",
+  "total_tables": 4,
+  "total_relationships": 10,
+  "summary": {
+    "fact_tables": 1,
+    "dimension_tables": 3,
+    "high_confidence_relationships": 0,
+    "primary_key_candidates": 0
+  },
+  "stored": true
+}
+```
+
+#### **Hierarchy Analysis Response**
+```json
+{
+  "status": "success",
+  "message": "Hierarchy analysis completed",
+  "analysis_timestamp": "2025-10-27T09:06:22.673278",
+  "total_tables": 4,
+  "total_hierarchies": 2,
+  "total_cross_relationships": 1,
+  "summary": {
+    "tables_with_hierarchies": 2,
+    "max_hierarchy_depth": 6,
+    "high_confidence_cross_relationships": 1,
+    "root_nodes": 2,
+    "leaf_nodes": 2
+  },
+  "stored": true
+}
+```
+
+### **Model Phase Testing Tips**
+
+1. **Start with Status**: Always check `/api/v1/model/status` first to ensure the phase is active
+2. **Run Analysis**: Use `/api/v1/model/analyze/all` for comprehensive analysis
+3. **Check Metadata**: Verify data is stored in `metadata.erd` and `metadata.hierarchies` tables
+4. **Validate Relationships**: Review join relationships and hierarchy structures
+5. **Test Confidence**: Adjust `min_confidence` parameters to filter results
+6. **Table-Specific Analysis**: Use `table_name` parameter for focused analysis
+
+### **Model Phase Notes**
+
+- **ERD Analysis**: Discovers table relationships, primary keys, and fact vs dimension classification
+- **Hierarchy Analysis**: Creates OLAP-compliant hierarchies with ROOT-to-LEAF progression
+- **Metadata Storage**: All analysis results are stored in ClickHouse metadata tables
+- **Confidence Scoring**: Relationships are scored for reliability and recommendation
+- **Cross-Hierarchy**: Discovers relationships between different table hierarchies
+- **Dimensional Modeling**: Provides foundation for star schema and data warehouse design
 
 ---
 

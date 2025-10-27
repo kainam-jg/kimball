@@ -1,363 +1,550 @@
 #!/usr/bin/env python3
 """
-Model Phase API Routes
-Handles ELT transformation orchestration, UDF management, and metadata-driven transformations.
+KIMBALL Model Phase API Routes
+
+This module provides API endpoints for the Model Phase, including:
+- ERD analysis and discovery
+- Hierarchy analysis and discovery
+- Metadata storage and retrieval
+- Dimensional modeling support
+
+Based on the archive analysis code with enhancements for Stage 2 data.
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
-from datetime import datetime
+from typing import Dict, List, Any, Optional
 import logging
+from datetime import datetime
 
+from ..model.erd_analyzer import ERDAnalyzer
+from ..model.hierarchy_analyzer import HierarchyAnalyzer
 from ..core.database import DatabaseManager
 
-# Configure logging
 logger = logging.getLogger(__name__)
 
 # Create router
 model_router = APIRouter(prefix="/api/v1/model", tags=["Model"])
 
-# Pydantic models
-class UDFRequest(BaseModel):
-    """Request model for creating/updating UDFs."""
-    transformation_stage: str
-    udf_name: str
-    udf_number: int
-    udf_logic: str
-    dependencies: List[str] = []
-    execution_frequency: str = "daily"
+# Pydantic models for request/response
+class ERDAnalysisRequest(BaseModel):
+    """Request model for ERD analysis."""
+    schema_name: str = "silver"
+    include_relationships: bool = True
+    min_confidence: float = 0.5
 
-class UDFExecutionRequest(BaseModel):
-    """Request model for executing UDFs."""
-    udf_name: str
-    dry_run: bool = False
+class HierarchyAnalysisRequest(BaseModel):
+    """Request model for hierarchy analysis."""
+    schema_name: str = "silver"
+    include_cross_hierarchies: bool = True
+    min_confidence: float = 0.5
 
-class TransformationStatus(BaseModel):
-    """Response model for transformation status."""
-    stage: str
-    udf_name: str
-    status: str
-    records_processed: int
-    execution_time: float
-    error_message: Optional[str] = None
+class MetadataQueryRequest(BaseModel):
+    """Request model for metadata queries."""
+    table_name: Optional[str] = None
+    schema_name: str = "silver"
+    limit: int = 100
 
-# API Endpoints
+class MetadataUpdateRequest(BaseModel):
+    """Request model for metadata updates."""
+    table_name: str
+    field_name: str
+    new_value: Any
+    schema_name: str = "silver"
+
+# Dependency for database manager
+def get_db_manager():
+    return DatabaseManager()
 
 @model_router.get("/status")
 async def get_model_status():
-    """Get overall model phase status."""
+    """
+    Get the current status of the Model Phase.
+    
+    Returns:
+        Dict[str, Any]: Model Phase status information
+    """
     try:
         db_manager = DatabaseManager()
         
-        # Get UDF count by stage
-        udf_count_query = """
-        SELECT 
-            transformation_stage,
-            COUNT(*) as udf_count
-        FROM metadata.transformation1
-        GROUP BY transformation_stage
-        ORDER BY transformation_stage
+        # Check if metadata tables exist
+        erd_table_exists = False
+        hierarchy_table_exists = False
+        
+        try:
+            erd_query = "SELECT COUNT(*) as count FROM metadata.erd LIMIT 1"
+            db_manager.execute_query(erd_query)
+            erd_table_exists = True
+        except:
+            pass
+        
+        try:
+            hierarchy_query = "SELECT COUNT(*) as count FROM metadata.hierarchies LIMIT 1"
+            db_manager.execute_query(hierarchy_query)
+            hierarchy_table_exists = True
+        except:
+            pass
+        
+        # Get Stage 2 table count
+        stage2_query = """
+        SELECT COUNT(*) as count 
+        FROM system.tables 
+        WHERE database = 'silver' 
+        AND name LIKE '%_stage2'
         """
-        
-        udf_counts = db_manager.execute_query(udf_count_query)
-        
-        # Get silver table count
-        silver_tables_query = "SHOW TABLES FROM silver"
-        silver_tables = db_manager.execute_query(silver_tables_query)
+        stage2_result = db_manager.execute_query(stage2_query)
+        stage2_count = stage2_result[0]['count'] if stage2_result else 0
         
         return {
             "status": "active",
             "phase": "Model",
-            "description": "ELT transformation orchestration with ClickHouse UDFs",
-            "udf_counts_by_stage": {row["transformation_stage"]: row["udf_count"] for row in udf_counts} if udf_counts else {},
-            "silver_tables": [table["name"] for table in silver_tables] if silver_tables else [],
-            "total_udfs": sum(row["udf_count"] for row in udf_counts) if udf_counts else 0,
-            "total_silver_tables": len(silver_tables) if silver_tables else 0
+            "stage2_tables": stage2_count,
+            "metadata_tables": {
+                "erd": erd_table_exists,
+                "hierarchies": hierarchy_table_exists
+            },
+            "analysis_available": erd_table_exists and hierarchy_table_exists,
+            "timestamp": datetime.now().isoformat()
         }
         
     except Exception as e:
-        logger.error(f"Error getting model status: {e}")
+        logger.error(f"Error getting Model Phase status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@model_router.get("/udfs")
-async def get_udfs(
-    stage: Optional[str] = Query(None, description="Filter by transformation stage"),
-    limit: int = Query(100, description="Maximum number of UDFs to return")
-):
-    """Get all UDFs or filter by stage."""
+@model_router.post("/erd/analyze")
+async def analyze_erd(request: ERDAnalysisRequest):
+    """
+    Perform ERD analysis on Stage 2 tables.
+    
+    Args:
+        request (ERDAnalysisRequest): ERD analysis parameters
+        
+    Returns:
+        Dict[str, Any]: ERD analysis results
+    """
+    try:
+        logger.info(f"Starting ERD analysis for schema: {request.schema_name}")
+        
+        # Initialize ERD analyzer
+        erd_analyzer = ERDAnalyzer()
+        
+        # Generate ERD metadata
+        erd_metadata = erd_analyzer.generate_erd_metadata()
+        
+        # Filter relationships by confidence if specified
+        if request.min_confidence > 0:
+            erd_metadata['relationships'] = [
+                rel for rel in erd_metadata['relationships']
+                if rel['join_confidence'] >= request.min_confidence
+            ]
+        
+        # Store metadata if analysis was successful
+        if erd_metadata['total_tables'] > 0:
+            store_success = erd_analyzer.store_erd_metadata(erd_metadata)
+            erd_metadata['stored'] = store_success
+        else:
+            erd_metadata['stored'] = False
+        
+        return {
+            "status": "success",
+            "message": "ERD analysis completed",
+            "analysis_timestamp": erd_metadata['analysis_timestamp'],
+            "total_tables": erd_metadata['total_tables'],
+            "total_relationships": erd_metadata['total_relationships'],
+            "summary": erd_metadata['summary'],
+            "stored": erd_metadata['stored'],
+            "metadata": erd_metadata
+        }
+        
+    except Exception as e:
+        logger.error(f"Error during ERD analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.post("/hierarchies/analyze")
+async def analyze_hierarchies(request: HierarchyAnalysisRequest):
+    """
+    Perform hierarchy analysis on Stage 2 tables.
+    
+    Args:
+        request (HierarchyAnalysisRequest): Hierarchy analysis parameters
+        
+    Returns:
+        Dict[str, Any]: Hierarchy analysis results
+    """
+    try:
+        logger.info(f"Starting hierarchy analysis for schema: {request.schema_name}")
+        
+        # Initialize hierarchy analyzer
+        hierarchy_analyzer = HierarchyAnalyzer()
+        
+        # Generate hierarchy metadata
+        hierarchy_metadata = hierarchy_analyzer.generate_hierarchy_metadata()
+        
+        # Filter cross-hierarchy relationships by confidence if specified
+        if request.min_confidence > 0:
+            hierarchy_metadata['cross_hierarchy_relationships'] = [
+                rel for rel in hierarchy_metadata['cross_hierarchy_relationships']
+                if rel['relationship_confidence'] >= request.min_confidence
+            ]
+        
+        # Store metadata if analysis was successful
+        if hierarchy_metadata['total_hierarchies'] > 0:
+            store_success = hierarchy_analyzer.store_hierarchy_metadata(hierarchy_metadata)
+            hierarchy_metadata['stored'] = store_success
+        else:
+            hierarchy_metadata['stored'] = False
+        
+        return {
+            "status": "success",
+            "message": "Hierarchy analysis completed",
+            "analysis_timestamp": hierarchy_metadata['analysis_timestamp'],
+            "total_tables": hierarchy_metadata['total_tables'],
+            "total_hierarchies": hierarchy_metadata['total_hierarchies'],
+            "total_cross_relationships": hierarchy_metadata['total_cross_relationships'],
+            "summary": hierarchy_metadata['summary'],
+            "stored": hierarchy_metadata['stored'],
+            "metadata": hierarchy_metadata
+        }
+        
+    except Exception as e:
+        logger.error(f"Error during hierarchy analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.get("/erd/metadata")
+async def get_erd_metadata(table_name: Optional[str] = None, limit: int = 100):
+    """
+    Get ERD metadata from the metadata.erd table.
+    
+    Args:
+        table_name (Optional[str]): Filter by specific table name
+        limit (int): Maximum number of records to return
+        
+    Returns:
+        Dict[str, Any]: ERD metadata
+    """
     try:
         db_manager = DatabaseManager()
         
-        where_clause = ""
-        if stage:
-            where_clause = f"WHERE transformation_stage = '{stage}'"
-        
+        # Build query
         query = f"""
         SELECT 
-            transformation_stage,
-            udf_name,
-            udf_number,
-            udf_logic,
-            dependencies,
-            execution_frequency,
-            created_at,
-            updated_at,
-            version
-        FROM metadata.transformation1
-        {where_clause}
-        ORDER BY transformation_stage, udf_number
-        LIMIT {limit}
+            table_name,
+            table_type,
+            row_count,
+            column_count,
+            primary_key_candidates,
+            fact_columns,
+            dimension_columns,
+            relationships,
+            analysis_timestamp
+        FROM metadata.erd
+        """
+        
+        if table_name:
+            query += f" WHERE table_name = '{table_name}'"
+        
+        query += f" ORDER BY analysis_timestamp DESC LIMIT {limit}"
+        
+        results = db_manager.execute_query(query)
+        
+        if not results:
+            return {
+                "status": "success",
+                "message": "No ERD metadata found",
+                "count": 0,
+                "data": []
+            }
+        
+        return {
+            "status": "success",
+            "message": "ERD metadata retrieved",
+            "count": len(results),
+            "data": results
+        }
+        
+    except Exception as e:
+        logger.error(f"Error retrieving ERD metadata: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.get("/hierarchies/metadata")
+async def get_hierarchy_metadata(table_name: Optional[str] = None, limit: int = 100):
+    """
+    Get hierarchy metadata from the metadata.hierarchies table.
+    
+    Args:
+        table_name (Optional[str]): Filter by specific table name
+        limit (int): Maximum number of records to return
+        
+    Returns:
+        Dict[str, Any]: Hierarchy metadata
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # Build query
+        query = f"""
+        SELECT 
+            table_name,
+            original_table_name,
+            hierarchy_name,
+            total_levels,
+            root_column,
+            root_cardinality,
+            leaf_column,
+            leaf_cardinality,
+            intermediate_levels,
+            parent_child_relationships,
+            sibling_relationships,
+            cross_hierarchy_relationships,
+            analysis_timestamp
+        FROM metadata.hierarchies
+        """
+        
+        if table_name:
+            query += f" WHERE table_name = '{table_name}'"
+        
+        query += f" ORDER BY analysis_timestamp DESC LIMIT {limit}"
+        
+        results = db_manager.execute_query(query)
+        
+        if not results:
+            return {
+                "status": "success",
+                "message": "No hierarchy metadata found",
+                "count": 0,
+                "data": []
+            }
+        
+        return {
+            "status": "success",
+            "message": "Hierarchy metadata retrieved",
+            "count": len(results),
+            "data": results
+        }
+        
+    except Exception as e:
+        logger.error(f"Error retrieving hierarchy metadata: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.get("/erd/relationships")
+async def get_erd_relationships(min_confidence: float = 0.5, limit: int = 100):
+    """
+    Get ERD relationships with confidence filtering.
+    
+    Args:
+        min_confidence (float): Minimum confidence threshold
+        limit (int): Maximum number of relationships to return
+        
+    Returns:
+        Dict[str, Any]: ERD relationships
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # Get relationships from metadata.discover (if available) or analyze on-the-fly
+        query = """
+        SELECT 
+            original_table_name,
+            original_column_name,
+            new_column_name,
+            inferred_type,
+            classification,
+            cardinality
+        FROM metadata.discover
+        WHERE classification = 'dimension'
+        ORDER BY original_table_name, cardinality
         """
         
         results = db_manager.execute_query(query)
         
-        return {
-            "status": "success",
-            "udfs": results if results else [],
-            "total_count": len(results) if results else 0,
-            "filtered_by_stage": stage
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting UDFs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@model_router.post("/udfs")
-async def create_udf(request: UDFRequest):
-    """Create a new UDF."""
-    try:
-        db_manager = DatabaseManager()
-        
-        # Generate new version for upsert
-        new_version = int(datetime.now().timestamp() * 1000000)
-        
-        # Insert UDF metadata
-        insert_sql = f"""
-        INSERT INTO metadata.transformation1 (
-            transformation_stage,
-            udf_name,
-            udf_number,
-            udf_logic,
-            dependencies,
-            execution_frequency,
-            version
-        ) VALUES (
-            '{request.transformation_stage}',
-            '{request.udf_name}',
-            {request.udf_number},
-            '{request.udf_logic.replace("'", "''")}',
-            {request.dependencies},
-            '{request.execution_frequency}',
-            {new_version}
-        )
-        """
-        
-        result = db_manager.execute_query(insert_sql)
-        
-        return {
-            "status": "success",
-            "message": f"UDF '{request.udf_name}' created successfully",
-            "udf_name": request.udf_name,
-            "transformation_stage": request.transformation_stage,
-            "version": new_version
-        }
-        
-    except Exception as e:
-        logger.error(f"Error creating UDF: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@model_router.post("/udfs/execute")
-async def execute_udf(request: UDFExecutionRequest):
-    """Execute a UDF."""
-    try:
-        db_manager = DatabaseManager()
-        
-        # Get UDF logic
-        udf_query = f"""
-        SELECT udf_logic, transformation_stage
-        FROM metadata.transformation1
-        WHERE udf_name = '{request.udf_name}'
-        ORDER BY version DESC
-        LIMIT 1
-        """
-        
-        udf_results = db_manager.execute_query(udf_query)
-        if not udf_results:
-            raise HTTPException(status_code=404, detail=f"UDF '{request.udf_name}' not found")
-        
-        udf_logic = udf_results[0]["udf_logic"]
-        stage = udf_results[0]["transformation_stage"]
-        
-        if request.dry_run:
-            return {
-                "status": "dry_run",
-                "message": f"Dry run for UDF '{request.udf_name}'",
-                "udf_logic": udf_logic,
-                "transformation_stage": stage
-            }
-        
-        # Execute UDF
-        start_time = datetime.now()
-        result = db_manager.execute_query(udf_logic)
-        execution_time = (datetime.now() - start_time).total_seconds()
-        
-        return {
-            "status": "success",
-            "message": f"UDF '{request.udf_name}' executed successfully",
-            "udf_name": request.udf_name,
-            "transformation_stage": stage,
-            "execution_time": execution_time,
-            "result": result
-        }
-        
-    except Exception as e:
-        logger.error(f"Error executing UDF: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@model_router.post("/transformations/stage1")
-async def execute_stage1_transformations():
-    """Execute all Stage 1 transformations (Bronze to Silver)."""
-    try:
-        db_manager = DatabaseManager()
-        
-        # Get all Stage 1 UDFs
-        stage1_query = """
-        SELECT udf_name, udf_logic
-        FROM metadata.transformation1
-        WHERE transformation_stage = 'stage1'
-        ORDER BY udf_number
-        """
-        
-        udfs = db_manager.execute_query(stage1_query)
-        if not udfs:
+        if not results:
             return {
                 "status": "success",
-                "message": "No Stage 1 UDFs found",
-                "transformations_executed": 0
+                "message": "No relationship data found",
+                "count": 0,
+                "relationships": []
             }
         
-        results = []
-        total_records = 0
+        # Group by table and find potential relationships
+        relationships = []
+        table_columns = {}
         
-        for udf in udfs:
-            udf_name = udf["udf_name"]
-            udf_logic = udf["udf_logic"]
-            
-            try:
-                start_time = datetime.now()
-                result = db_manager.execute_query(udf_logic)
-                execution_time = (datetime.now() - start_time).total_seconds()
+        for row in results:
+            table_name = row['original_table_name']
+            if table_name not in table_columns:
+                table_columns[table_name] = []
+            table_columns[table_name].append(row)
+        
+        # Find relationships within tables (hierarchies)
+        for table_name, columns in table_columns.items():
+            if len(columns) > 1:
+                # Sort by cardinality
+                sorted_columns = sorted(columns, key=lambda x: x['cardinality'])
                 
-                # Try to get record count from result
-                records_processed = 0
-                if result and isinstance(result, list) and len(result) > 0:
-                    if isinstance(result[0], dict) and "written_rows" in result[0]:
-                        records_processed = result[0]["written_rows"]
-                
-                results.append({
-                    "udf_name": udf_name,
-                    "status": "success",
-                    "records_processed": records_processed,
-                    "execution_time": execution_time
-                })
-                
-                total_records += records_processed
-                
-            except Exception as e:
-                results.append({
-                    "udf_name": udf_name,
-                    "status": "error",
-                    "error_message": str(e),
-                    "records_processed": 0,
-                    "execution_time": 0
-                })
+                # Create hierarchy relationships
+                for i in range(len(sorted_columns) - 1):
+                    parent = sorted_columns[i]
+                    child = sorted_columns[i + 1]
+                    
+                    confidence = min(parent['cardinality'], child['cardinality']) / max(parent['cardinality'], child['cardinality']) if max(parent['cardinality'], child['cardinality']) > 0 else 0
+                    
+                    if confidence >= min_confidence:
+                        relationships.append({
+                            'table1': table_name,
+                            'column1': parent['new_column_name'],
+                            'table2': table_name,
+                            'column2': child['new_column_name'],
+                            'relationship_type': 'hierarchy',
+                            'confidence': confidence,
+                            'parent_cardinality': parent['cardinality'],
+                            'child_cardinality': child['cardinality']
+                        })
+        
+        # Sort by confidence and limit
+        relationships.sort(key=lambda x: x['confidence'], reverse=True)
+        relationships = relationships[:limit]
         
         return {
             "status": "success",
-            "message": f"Stage 1 transformations completed",
-            "transformations_executed": len(results),
-            "total_records_processed": total_records,
-            "results": results
+            "message": "ERD relationships retrieved",
+            "count": len(relationships),
+            "relationships": relationships
         }
         
     except Exception as e:
-        logger.error(f"Error executing Stage 1 transformations: {e}")
+        logger.error(f"Error retrieving ERD relationships: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@model_router.get("/silver/tables")
-async def get_silver_tables():
-    """Get all silver layer tables with their structure."""
+@model_router.get("/hierarchies/levels")
+async def get_hierarchy_levels(table_name: Optional[str] = None):
+    """
+    Get hierarchy level information for dimensional modeling.
+    
+    Args:
+        table_name (Optional[str]): Filter by specific table name
+        
+    Returns:
+        Dict[str, Any]: Hierarchy level information
+    """
     try:
         db_manager = DatabaseManager()
         
-        # Get all silver tables
-        tables_query = "SHOW TABLES FROM silver"
-        tables = db_manager.execute_query(tables_query)
-        
-        if not tables:
-            return {
-                "status": "success",
-                "silver_tables": [],
-                "total_count": 0
-            }
-        
-        # Get structure for each table
-        table_details = []
-        for table in tables:
-            table_name = table["name"]
-            
-            # Get table structure
-            desc_query = f"DESCRIBE silver.{table_name}"
-            columns = db_manager.execute_query(desc_query)
-            
-            # Get record count
-            count_query = f"SELECT COUNT(*) as count FROM silver.{table_name}"
-            count_result = db_manager.execute_query(count_query)
-            record_count = count_result[0]["count"] if count_result else 0
-            
-            table_details.append({
-                "table_name": table_name,
-                "columns": columns if columns else [],
-                "record_count": record_count
-            })
-        
-        return {
-            "status": "success",
-            "silver_tables": table_details,
-            "total_count": len(table_details)
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting silver tables: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@model_router.get("/silver/tables/{table_name}/sample")
-async def get_silver_table_sample(
-    table_name: str,
-    limit: int = Query(10, description="Number of sample records to return")
-):
-    """Get sample data from a silver table."""
-    try:
-        db_manager = DatabaseManager()
-        
-        # Get sample data
-        sample_query = f"""
-        SELECT *
-        FROM silver.{table_name}
-        LIMIT {limit}
+        # Get hierarchy data from metadata.discover
+        query = """
+        SELECT 
+            original_table_name,
+            original_column_name,
+            new_column_name,
+            inferred_type,
+            classification,
+            cardinality,
+            null_count
+        FROM metadata.discover
+        WHERE classification = 'dimension'
         """
         
-        results = db_manager.execute_query(sample_query)
+        if table_name:
+            query += f" AND original_table_name = '{table_name}'"
+        
+        query += " ORDER BY original_table_name, cardinality ASC"
+        
+        results = db_manager.execute_query(query)
+        
+        if not results:
+            return {
+                "status": "success",
+                "message": "No hierarchy data found",
+                "count": 0,
+                "hierarchies": {}
+            }
+        
+        # Group by table and build hierarchy levels
+        hierarchies = {}
+        current_table = None
+        current_hierarchy = None
+        
+        for row in results:
+            table_name = row['original_table_name']
+            
+            if table_name != current_table:
+                if current_hierarchy:
+                    hierarchies[current_table] = current_hierarchy
+                
+                current_table = table_name
+                current_hierarchy = {
+                    'table_name': table_name,
+                    'levels': [],
+                    'total_levels': 0,
+                    'root_column': None,
+                    'leaf_column': None
+                }
+            
+            level_info = {
+                'column_name': row['new_column_name'],
+                'original_column_name': row['original_column_name'],
+                'data_type': row['inferred_type'],
+                'cardinality': row['cardinality'],
+                'null_count': row['null_count'],
+                'level': len(current_hierarchy['levels'])
+            }
+            
+            current_hierarchy['levels'].append(level_info)
+            current_hierarchy['total_levels'] += 1
+            
+            # Set root and leaf
+            if current_hierarchy['total_levels'] == 1:
+                current_hierarchy['root_column'] = row['new_column_name']
+            current_hierarchy['leaf_column'] = row['new_column_name']
+        
+        # Add the last hierarchy
+        if current_hierarchy:
+            hierarchies[current_table] = current_hierarchy
         
         return {
             "status": "success",
-            "table_name": table_name,
-            "sample_data": results if results else [],
-            "sample_size": len(results) if results else 0,
-            "requested_limit": limit
+            "message": "Hierarchy levels retrieved",
+            "count": len(hierarchies),
+            "hierarchies": hierarchies
         }
         
     except Exception as e:
-        logger.error(f"Error getting sample data from {table_name}: {e}")
+        logger.error(f"Error retrieving hierarchy levels: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.post("/analyze/all")
+async def analyze_all():
+    """
+    Perform both ERD and hierarchy analysis in sequence.
+    
+    Returns:
+        Dict[str, Any]: Combined analysis results
+    """
+    try:
+        logger.info("Starting comprehensive Model Phase analysis")
+        
+        # Perform ERD analysis
+        erd_request = ERDAnalysisRequest()
+        erd_result = await analyze_erd(erd_request)
+        
+        # Perform hierarchy analysis
+        hierarchy_request = HierarchyAnalysisRequest()
+        hierarchy_result = await analyze_hierarchies(hierarchy_request)
+        
+        return {
+            "status": "success",
+            "message": "Comprehensive Model Phase analysis completed",
+            "analysis_timestamp": datetime.now().isoformat(),
+            "erd_analysis": erd_result,
+            "hierarchy_analysis": hierarchy_result,
+            "summary": {
+                "erd_tables": erd_result.get("total_tables", 0),
+                "erd_relationships": erd_result.get("total_relationships", 0),
+                "hierarchy_tables": hierarchy_result.get("total_tables", 0),
+                "hierarchies": hierarchy_result.get("total_hierarchies", 0),
+                "cross_relationships": hierarchy_result.get("total_cross_relationships", 0)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error during comprehensive analysis: {e}")
         raise HTTPException(status_code=500, detail=str(e))

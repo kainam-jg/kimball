@@ -1,24 +1,18 @@
 """
-KIMBALL Model Phase
+KIMBALL Model Phase Package
 
-This module handles data modeling and schema design:
-- ERD generation and editing
-- Hierarchy discovery and modeling
-- Star schema design
-- Silver layer (3NF) modeling
-- Gold layer (star schema) modeling
+This package contains the Model Phase components for ERD analysis and 
+dimensional hierarchy discovery in the KIMBALL data modeling pipeline.
 
-Creates user-editable models for data warehouse design.
+Components:
+- ERDAnalyzer: Entity Relationship Diagram analysis
+- HierarchyAnalyzer: Dimensional hierarchy analysis
+- Model Phase APIs: REST endpoints for model analysis
+
+Based on archive analysis code with enhancements for Stage 2 data.
 """
 
-from .erd_generator import ERDGenerator
-from .hierarchy_modeler import HierarchyModeler
-from .star_schema_designer import StarSchemaDesigner
-from .schema_transformer import SchemaTransformer
+from .erd_analyzer import ERDAnalyzer
+from .hierarchy_analyzer import HierarchyAnalyzer
 
-__all__ = [
-    'ERDGenerator',
-    'HierarchyModeler',
-    'StarSchemaDesigner', 
-    'SchemaTransformer'
-]
+__all__ = ['ERDAnalyzer', 'HierarchyAnalyzer']
