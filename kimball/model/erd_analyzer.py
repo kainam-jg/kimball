@@ -112,7 +112,7 @@ class ERDAnalyzer:
                 'column_count': len(columns),
                 'table_type': table_type,
                 'columns': column_analysis,
-                'analysis_timestamp': datetime.now().isoformat()
+                'analysis_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }
             
             self.table_metadata[table_name] = metadata
@@ -502,7 +502,7 @@ class ERDAnalyzer:
         # Generate ERD metadata
         erd_metadata = {
             'schema_name': 'silver',
-            'analysis_timestamp': datetime.now().isoformat(),
+            'analysis_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'total_tables': len(self.stage2_tables),
             'total_relationships': len(relationships),
             'tables': self.table_metadata,
@@ -576,8 +576,8 @@ class ERDAnalyzer:
                     {hash(table_name) % 2**63}, '{erd_metadata['schema_name']}',
                     '{erd_metadata['analysis_timestamp']}', '{table_name}',
                     '{table_metadata['table_type']}', {table_metadata['row_count']},
-                    {table_metadata['column_count']}, {pk_candidates},
-                    {fact_columns}, {dimension_columns}, {table_relationships},
+                    {table_metadata['column_count']}, {repr(pk_candidates)},
+                    {repr(fact_columns)}, {repr(dimension_columns)}, {repr(table_relationships)},
                     '{str(table_metadata).replace("'", "''")}'
                 )
                 """

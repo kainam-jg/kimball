@@ -434,7 +434,7 @@ class HierarchyAnalyzer:
         # Generate hierarchy metadata
         hierarchy_metadata = {
             'schema_name': 'silver',
-            'analysis_timestamp': datetime.now().isoformat(),
+            'analysis_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'total_tables': len(self.stage2_tables),
             'total_dimension_columns': len(self.dimension_columns),
             'total_hierarchies': len(hierarchies),
@@ -539,8 +539,8 @@ class HierarchyAnalyzer:
                     '{hierarchy['original_table_name']}', '{table_name}_hierarchy',
                     {hierarchy['total_levels']}, '{hierarchy['root']['column']}',
                     {hierarchy['root']['cardinality']}, '{hierarchy['leaf']['column']}',
-                    {hierarchy['leaf']['cardinality']}, {intermediate_levels},
-                    {parent_child_rels}, {sibling_rels}, {cross_rels},
+                    {hierarchy['leaf']['cardinality']}, {repr(intermediate_levels)},
+                    {repr(parent_child_rels)}, {repr(sibling_rels)}, {repr(cross_rels)},
                     '{str(hierarchy).replace("'", "''")}'
                 )
                 """
