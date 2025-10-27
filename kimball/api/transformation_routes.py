@@ -1,7 +1,22 @@
 #!/usr/bin/env python3
 """
 Transformation Phase API Routes
-Handles UDF management, creation, updating, and execution for ELT transformations.
+
+This module handles UDF (User-Defined Function) management, creation, updating, 
+and execution for ELT transformations in the KIMBALL pipeline.
+
+Key Features:
+- UDF lifecycle management (create, read, update, delete)
+- Schema-based UDF organization
+- ClickHouse UDF function creation and execution
+- Transformation orchestration by stage
+- Real-time monitoring and metrics
+
+Architecture:
+- UDF metadata stored in metadata.transformation1 table
+- Multi-stage processing (Bronze → Silver → Gold)
+- Metadata-driven transformations with dependencies
+- Version control and upsert functionality
 """
 
 from fastapi import APIRouter, HTTPException, Query
@@ -15,10 +30,10 @@ from ..core.database import DatabaseManager
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Create router
+# Create router for Transformation Phase API endpoints
 transformation_router = APIRouter(prefix="/api/v1/transformation", tags=["Transformation"])
 
-# Pydantic models
+# Pydantic models for request/response validation
 class UDFRequest(BaseModel):
     """Request model for creating/updating UDFs."""
     transformation_stage: str
@@ -61,7 +76,15 @@ class TransformationStatus(BaseModel):
 
 @transformation_router.get("/status")
 async def get_transformation_status():
-    """Get overall transformation phase status."""
+    """
+    Get overall transformation phase status.
+    
+    Returns:
+        - Current phase status and description
+        - UDF counts by stage and schema
+        - Total UDFs and schemas
+        - Active transformation metrics
+    """
     try:
         db_manager = DatabaseManager()
         
@@ -109,7 +132,18 @@ async def get_udfs(
     schema: Optional[str] = Query(None, description="Filter by UDF schema name"),
     limit: int = Query(100, description="Maximum number of UDFs to return")
 ):
-    """Get all UDFs or filter by stage/schema."""
+    """
+    Get all UDFs or filter by stage/schema.
+    
+    Parameters:
+        - stage: Filter UDFs by transformation stage (e.g., 'stage1', 'stage2')
+        - schema: Filter UDFs by schema name (e.g., 'default', 'custom')
+        - limit: Maximum number of UDFs to return (default: 100)
+    
+    Returns:
+        - List of UDFs with metadata
+        - Total count and filter information
+    """
     try:
         db_manager = DatabaseManager()
         
@@ -195,7 +229,25 @@ async def get_udf_by_name(udf_name: str):
 
 @transformation_router.post("/udfs")
 async def create_udf(request: UDFRequest):
-    """Create a new UDF."""
+    """
+    Create a new UDF with metadata.
+    
+    This endpoint creates a new UDF entry in the metadata.transformation1 table.
+    The UDF logic is stored as SQL text and can be executed later.
+    
+    Parameters:
+        - transformation_stage: Stage identifier (e.g., 'stage1', 'stage2')
+        - udf_name: Unique name for the UDF
+        - udf_number: Execution order number
+        - udf_logic: SQL transformation logic
+        - udf_schema_name: Schema where UDF is stored (default: 'default')
+        - dependencies: List of dependent UDFs
+        - execution_frequency: How often to run (e.g., 'daily', 'hourly')
+    
+    Returns:
+        - Success message with UDF details
+        - New version number for upsert functionality
+    """
     try:
         db_manager = DatabaseManager()
         
@@ -320,7 +372,21 @@ async def update_udf(udf_name: str, request: UDFUpdateRequest):
 
 @transformation_router.post("/udfs/create")
 async def create_udf_in_clickhouse(request: UDFCreationRequest):
-    """Create the actual UDF function in ClickHouse."""
+    """
+    Create the actual UDF function in ClickHouse.
+    
+    This endpoint creates the actual UDF function in ClickHouse using the stored SQL logic.
+    It retrieves the UDF metadata and creates a ClickHouse function that can be executed.
+    
+    Parameters:
+        - udf_name: Name of the UDF to create
+        - transformation_stage: Stage identifier
+        - create_if_not_exists: Whether to create if function doesn't exist
+    
+    Returns:
+        - Success message with UDF creation details
+        - SQL statement used for creation
+    """
     try:
         db_manager = DatabaseManager()
         
@@ -437,7 +503,17 @@ async def execute_udf(request: UDFExecutionRequest):
 
 @transformation_router.post("/transformations/stage1")
 async def execute_stage1_transformations():
-    """Execute all Stage 1 transformations (Bronze to Silver)."""
+    """
+    Execute all Stage 1 transformations (Bronze to Silver).
+    
+    This endpoint executes all UDFs in the 'stage1' transformation stage.
+    It processes transformations in order and provides detailed results.
+    
+    Returns:
+        - Execution results for each UDF
+        - Total records processed
+        - Execution times and error information
+    """
     try:
         db_manager = DatabaseManager()
         

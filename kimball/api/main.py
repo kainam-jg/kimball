@@ -2,7 +2,16 @@
 KIMBALL FastAPI Main Application
 
 This is the main FastAPI application that orchestrates all KIMBALL services.
-It provides a unified API for the four phases: Acquire, Discover, Model, Build.
+It provides a unified API for the five phases: Acquire, Discover, Transformation, Model, Build.
+
+Current Active Phases:
+- Acquire: Data source management and data extraction
+- Discover: Metadata analysis and intelligent type inference
+- Transformation: ELT orchestration with ClickHouse UDFs
+
+Future Phases:
+- Model: ERD generation and schema modeling
+- Build: Pipeline generation and orchestration
 """
 
 from fastapi import FastAPI, HTTPException
@@ -11,12 +20,16 @@ from fastapi.responses import JSONResponse
 import logging
 from typing import Dict, Any
 
+# Import active API routers
 from .acquire_routes import acquire_router
 from .discover_routes import discover_router
 from .transformation_routes import transformation_router
-# COMMENTED OUT FOR SYSTEMATIC TESTING
+
+# Future phases (commented out for systematic testing)
 # from .model_routes import model_router
 # from .build_routes import build_router
+
+# Core configuration and logging
 from ..core.config import Config
 from ..core.logger import Logger
 
@@ -42,11 +55,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers for each phase - ACQUIRE, DISCOVER, AND TRANSFORMATION ACTIVE
+# Include active API routers
+# Each router handles a specific phase of the KIMBALL pipeline
 app.include_router(acquire_router, tags=["Acquire"])
 app.include_router(discover_router, tags=["Discover"])
 app.include_router(transformation_router, tags=["Transformation"])
-# COMMENTED OUT FOR SYSTEMATIC TESTING
+
+# Future phases (commented out for systematic testing)
 # app.include_router(model_router, tags=["Model"])
 # app.include_router(build_router, tags=["Build"])
 
@@ -56,7 +71,7 @@ async def root():
     return {
         "message": "KIMBALL API - Kinetic Intelligent Model Builder",
         "version": "2.0.0",
-        "phases": ["Acquire", "Discover", "Transformation"],  # Acquire, Discover, and Transformation active
+        "phases": ["Acquire", "Discover", "Transformation"],  # Currently active phases
         "docs": "/docs",
         "redoc": "/redoc"
     }
