@@ -76,12 +76,12 @@ The Transformation Phase implements a sophisticated ELT (Extract, Load, Transfor
 ###### **Stage 2: Change Data Capture (CDC) (Silver Stage1 → Silver Stage2)**
 - **Purpose**: Implement CDC using delta lake concepts for current data maintenance
 - **Process**:
-  1. Create Stage 2 tables with `ReplacingMergeTree` engine
-  2. Use `create_date` as version for deduplication
-  3. Insert/update records from Stage 1 to Stage 2
-  4. Optimize tables to merge duplicates
-- **Tables**: No suffix (e.g., `sales_transactions`) - these are the "current" tables
-- **CDC Logic**: Uses `create_date` field to identify new/changed records
+  1. Create Stage 2 tables with `MergeTree` engine
+  2. Drop and recreate tables to avoid deduplication issues
+  3. Insert all records from Stage 1 to Stage 2
+  4. Maintain clean data transfer
+- **Tables**: `*_stage2` suffix (e.g., `sales_transactions_stage2`) - these are the "current" tables
+- **CDC Logic**: Drop and recreate approach ensures clean data transfer
 
 ###### **Stage 3+: Business Logic and Aggregation (Silver → Gold)**
 - **Purpose**: Apply business rules and create analytical datasets
@@ -92,27 +92,25 @@ The Transformation Phase implements a sophisticated ELT (Extract, Load, Transfor
 The Stage 2 CDC implementation follows delta lake principles:
 
 ```sql
--- Stage 2 Table Creation (ReplacingMergeTree for CDC)
-CREATE TABLE IF NOT EXISTS silver.sales_transactions AS silver.sales_transactions_stage1
-ENGINE = ReplacingMergeTree(create_date)
+-- Stage 2 Table Creation (MergeTree for clean data transfer)
+DROP TABLE IF EXISTS silver.sales_transactions_stage2;
+
+CREATE TABLE silver.sales_transactions_stage2 AS silver.sales_transactions_stage1
+ENGINE = MergeTree()
 ORDER BY create_date;
 
--- CDC Logic: Insert/Update from Stage 1 to Stage 2
-INSERT INTO silver.sales_transactions
+-- CDC Logic: Insert all data from Stage 1 to Stage 2
+INSERT INTO silver.sales_transactions_stage2
 SELECT *
-FROM silver.sales_transactions_stage1
-WHERE create_date >= toDate(now()) - INTERVAL 1 DAY;
-
--- Optimize table to merge duplicates
-OPTIMIZE TABLE silver.sales_transactions FINAL;
+FROM silver.sales_transactions_stage1;
 ```
 
 **CDC Benefits**:
 - **Current Data**: Stage 2 tables always contain the most current data
-- **Change Tracking**: Uses `create_date` to identify new/changed records
-- **Deduplication**: `ReplacingMergeTree` automatically handles duplicates
+- **Clean Transfer**: Drop and recreate approach ensures no stale data
 - **Performance**: Optimized for both inserts and queries
 - **Scalability**: Handles large datasets efficiently
+- **Reliability**: No deduplication issues with identical timestamps
 
 ##### **Metadata Schema**
 ```sql

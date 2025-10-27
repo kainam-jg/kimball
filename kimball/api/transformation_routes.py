@@ -632,14 +632,20 @@ async def execute_stage2_transformations():
             
             try:
                 start_time = datetime.now()
-                result = db_manager.execute_query(udf_logic)
-                execution_time = (datetime.now() - start_time).total_seconds()
                 
-                # Try to get record count from result
+                # Split multi-statement SQL and execute each statement separately
+                statements = [stmt.strip() for stmt in udf_logic.split(';') if stmt.strip()]
+                
                 records_processed = 0
-                if result and isinstance(result, list) and len(result) > 0:
-                    if isinstance(result[0], dict) and "written_rows" in result[0]:
-                        records_processed = result[0]["written_rows"]
+                for statement in statements:
+                    if statement:  # Skip empty statements
+                        result = db_manager.execute_query(statement)
+                        # Try to get record count from result
+                        if result and isinstance(result, list) and len(result) > 0:
+                            if isinstance(result[0], dict) and "written_rows" in result[0]:
+                                records_processed += result[0]["written_rows"]
+                
+                execution_time = (datetime.now() - start_time).total_seconds()
                 
                 results.append({
                     "udf_name": udf_name,
