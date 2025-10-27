@@ -38,7 +38,7 @@ KIMBALL follows a four-phase approach:
 - **Relationship discovery** and join candidate identification
 - **Primary key detection** and foreign key mapping
 
-### 3. **Model Phase** 🏗️ **IN PROGRESS**
+### 3. **Transformation Phase** 🔄 **IN PROGRESS**
 - **ELT Architecture**: Extract, Load, Transform using ClickHouse UDFs
 - **Transformation Orchestration**: Automated UDF execution with dependency management
 - **Delta Lake Framework**: Standardized change data capture and versioning
@@ -47,7 +47,13 @@ KIMBALL follows a four-phase approach:
 - **Rollback Capabilities**: Transaction-safe transformations with rollback support
 - **Monitoring & Logging**: Comprehensive transformation monitoring and audit trails
 
-### 4. **Build Phase** 🚀
+### 4. **Model Phase** 🏗️
+- **Interactive ERD generation** and editing
+- **Hierarchical relationship modeling** (OLAP-style)
+- **Star schema design** for data warehouse optimization
+- **Silver layer (3NF)** and **Gold layer (star schema)** modeling
+
+### 5. **Build Phase** 🚀
 - **Automated DAG generation** for production pipelines
 - **SQL transformation** code generation
 - **Pipeline orchestration** and scheduling
@@ -492,6 +498,17 @@ Once the FastAPI backend is running, visit:
 - `GET /api/v1/discover/catalog/{catalog_id}` - Get catalog
 - `POST /api/v1/discover/quality` - Assess data quality
 - `POST /api/v1/discover/relationships` - Find relationships
+
+#### Transformation Phase
+- `GET /api/v1/transformation/status` - Get transformation phase status
+- `GET /api/v1/transformation/udfs` - List all UDFs (with filtering by stage/schema)
+- `GET /api/v1/transformation/udfs/{udf_name}` - Get specific UDF details
+- `POST /api/v1/transformation/udfs` - Create new UDF
+- `PUT /api/v1/transformation/udfs/{udf_name}` - Update existing UDF
+- `POST /api/v1/transformation/udfs/create` - Create UDF function in ClickHouse
+- `POST /api/v1/transformation/udfs/execute` - Execute UDF
+- `POST /api/v1/transformation/transformations/stage1` - Execute all Stage 1 transformations
+- `GET /api/v1/transformation/schemas` - Get all UDF schemas
 
 #### Model Phase (Coming Soon)
 - `POST /api/v1/model/erd` - Generate ERD

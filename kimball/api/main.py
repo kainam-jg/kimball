@@ -13,8 +13,9 @@ from typing import Dict, Any
 
 from .acquire_routes import acquire_router
 from .discover_routes import discover_router
-from .model_routes import model_router
+from .transformation_routes import transformation_router
 # COMMENTED OUT FOR SYSTEMATIC TESTING
+# from .model_routes import model_router
 # from .build_routes import build_router
 from ..core.config import Config
 from ..core.logger import Logger
@@ -41,11 +42,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers for each phase - ACQUIRE, DISCOVER, AND MODEL ACTIVE
+# Include routers for each phase - ACQUIRE, DISCOVER, AND TRANSFORMATION ACTIVE
 app.include_router(acquire_router, tags=["Acquire"])
 app.include_router(discover_router, tags=["Discover"])
-app.include_router(model_router, tags=["Model"])
+app.include_router(transformation_router, tags=["Transformation"])
 # COMMENTED OUT FOR SYSTEMATIC TESTING
+# app.include_router(model_router, tags=["Model"])
 # app.include_router(build_router, tags=["Build"])
 
 @app.get("/")
@@ -54,7 +56,7 @@ async def root():
     return {
         "message": "KIMBALL API - Kinetic Intelligent Model Builder",
         "version": "2.0.0",
-        "phases": ["Acquire", "Discover", "Model"],  # Acquire, Discover, and Model active
+        "phases": ["Acquire", "Discover", "Transformation"],  # Acquire, Discover, and Transformation active
         "docs": "/docs",
         "redoc": "/redoc"
     }
