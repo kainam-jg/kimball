@@ -526,6 +526,131 @@ curl -X POST "http://localhost:8000/api/v1/model/analyze/all"
 4. **Validate Relationships**: Review join relationships and hierarchy structures
 5. **Test Confidence**: Adjust `min_confidence` parameters to filter results
 6. **Table-Specific Analysis**: Use `table_name` parameter for focused analysis
+7. **Edit Relationships**: Use PUT endpoints to modify discovered relationships and hierarchies
+8. **Create Custom**: Use POST endpoints to create custom relationships and hierarchies
+9. **Delete Unwanted**: Use DELETE endpoints to remove unwanted relationships and hierarchies
+
+### **ERD and Hierarchy Editing**
+
+#### **Edit ERD Relationship**
+```bash
+curl -X PUT "http://localhost:8000/api/v1/model/erd/edit" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "table_name": "daily_sales",
+    "table_type": "fact",
+    "primary_key_candidates": ["transaction_id", "date"],
+    "fact_columns": ["amount_sales", "quantity"],
+    "dimension_columns": ["dealer_id", "region_id"],
+    "relationships": [
+      {
+        "table1": "daily_sales",
+        "column1": "dealer_id",
+        "table2": "dealers",
+        "column2": "dealer_id",
+        "relationship_type": "foreign_key",
+        "confidence": 0.95
+      }
+    ]
+  }'
+```
+
+#### **Edit Hierarchy**
+```bash
+curl -X PUT "http://localhost:8000/api/v1/model/hierarchies/edit" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "table_name": "dealers",
+    "hierarchy_name": "geographic_hierarchy",
+    "root_column": "region",
+    "leaf_column": "dealer_name",
+    "intermediate_levels": [
+      {
+        "level": 1,
+        "column_name": "region",
+        "cardinality": 5
+      },
+      {
+        "level": 2,
+        "column_name": "city",
+        "cardinality": 25
+      },
+      {
+        "level": 3,
+        "column_name": "dealer_name",
+        "cardinality": 100
+      }
+    ]
+  }'
+```
+
+### **Custom Creation**
+
+#### **Create Custom Hierarchy**
+```bash
+curl -X POST "http://localhost:8000/api/v1/model/hierarchies/create" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "table_name": "vehicles",
+    "hierarchy_name": "vehicle_classification",
+    "description": "Custom vehicle classification hierarchy",
+    "levels": [
+      {
+        "level": 1,
+        "column_name": "vehicle_type",
+        "cardinality": 3,
+        "description": "Main vehicle type"
+      },
+      {
+        "level": 2,
+        "column_name": "make",
+        "cardinality": 15,
+        "description": "Vehicle manufacturer"
+      },
+      {
+        "level": 3,
+        "column_name": "model",
+        "cardinality": 50,
+        "description": "Specific model"
+      }
+    ]
+  }'
+```
+
+#### **Create Custom ERD Relationship**
+```bash
+curl -X POST "http://localhost:8000/api/v1/model/erd/create" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "table1": "daily_sales",
+    "column1": "vehicle_id",
+    "table2": "vehicles",
+    "column2": "vehicle_id",
+    "relationship_type": "foreign_key",
+    "confidence": 0.98,
+    "description": "Sales to vehicle relationship"
+  }'
+```
+
+### **Deletion**
+
+#### **Delete ERD Relationships**
+```bash
+# Delete all relationships for a table
+curl -X DELETE "http://localhost:8000/api/v1/model/erd/relationships/daily_sales"
+
+# Delete specific relationship (if relationship_id is provided)
+curl -X DELETE "http://localhost:8000/api/v1/model/erd/relationships/daily_sales?relationship_id=rel_123"
+```
+
+#### **Delete Hierarchy**
+```bash
+# Delete hierarchy for a table
+curl -X DELETE "http://localhost:8000/api/v1/model/hierarchies/dealers"
+
+# Delete specific hierarchy (if hierarchy_name is provided)
+curl -X DELETE "http://localhost:8000/api/v1/model/hierarchies/dealers?hierarchy_name=geographic_hierarchy"
+```
 
 ### **Model Phase Notes**
 
@@ -535,6 +660,10 @@ curl -X POST "http://localhost:8000/api/v1/model/analyze/all"
 - **Confidence Scoring**: Relationships are scored for reliability and recommendation
 - **Cross-Hierarchy**: Discovers relationships between different table hierarchies
 - **Dimensional Modeling**: Provides foundation for star schema and data warehouse design
+- **Editing Capabilities**: Full CRUD operations for ERD relationships and hierarchies
+- **Custom Creation**: Ability to create user-defined relationships and hierarchies
+- **Version Control**: All changes are versioned with timestamps for audit trails
+- **Soft Deletion**: Deletion operations preserve history through versioning
 
 ---
 

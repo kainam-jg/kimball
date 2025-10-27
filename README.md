@@ -58,6 +58,9 @@ KIMBALL follows a four-phase approach:
 - **Metadata Storage**: ClickHouse `metadata.erd` and `metadata.hierarchies` tables
 - **Confidence Scoring**: Relationship confidence calculation for join recommendations
 - **Dimensional Modeling Support**: Foundation for star schema and data warehouse design
+- **✏️ Editing Capabilities**: Full CRUD operations for ERD relationships and hierarchies
+- **🎨 Custom Creation**: User-defined relationship and hierarchy creation
+- **🗑️ Deletion Management**: Soft deletion with version control and audit trails
 
 #### **🔄 Model Phase Architecture**
 
@@ -82,6 +85,14 @@ The Model Phase provides comprehensive ERD and hierarchy analysis for dimensiona
 - **`metadata.hierarchies`**: Dimensional hierarchy metadata with level structures and relationships
 - **Upsert Functionality**: Automatic metadata updates with version control
 - **Query Optimization**: Indexed metadata tables for fast retrieval
+
+##### **Editing and Customization**
+- **ERD Relationship Editing**: Modify table types, primary keys, fact/dimension columns, and relationships
+- **Hierarchy Editing**: Customize hierarchy names, root/leaf columns, and level structures
+- **Custom Relationship Creation**: Create user-defined ERD relationships between any tables/columns
+- **Custom Hierarchy Creation**: Build custom dimensional hierarchies with specific level definitions
+- **Soft Deletion**: Remove relationships and hierarchies while preserving audit history
+- **Bulk Operations**: Update multiple relationships or hierarchy levels in single operations
 
 ### 5. **Build Phase** 🔄 **COMING SOON**
 - **Pipeline Generation**: Automated data pipeline creation

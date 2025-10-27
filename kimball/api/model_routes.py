@@ -52,6 +52,44 @@ class MetadataUpdateRequest(BaseModel):
     new_value: Any
     schema_name: str = "silver"
 
+class ERDRelationshipEditRequest(BaseModel):
+    """Request model for editing ERD relationships."""
+    table_name: str
+    relationship_id: Optional[str] = None
+    table_type: Optional[str] = None
+    primary_key_candidates: Optional[List[str]] = None
+    fact_columns: Optional[List[str]] = None
+    dimension_columns: Optional[List[str]] = None
+    relationships: Optional[List[Dict[str, Any]]] = None
+
+class HierarchyEditRequest(BaseModel):
+    """Request model for editing hierarchies."""
+    table_name: str
+    hierarchy_name: Optional[str] = None
+    root_column: Optional[str] = None
+    leaf_column: Optional[str] = None
+    intermediate_levels: Optional[List[Dict[str, Any]]] = None
+    parent_child_relationships: Optional[List[Dict[str, Any]]] = None
+    sibling_relationships: Optional[List[Dict[str, Any]]] = None
+    cross_hierarchy_relationships: Optional[List[Dict[str, Any]]] = None
+
+class HierarchyCreateRequest(BaseModel):
+    """Request model for creating custom hierarchies."""
+    table_name: str
+    hierarchy_name: str
+    levels: List[Dict[str, Any]]  # List of level definitions
+    description: Optional[str] = None
+
+class ERDRelationshipCreateRequest(BaseModel):
+    """Request model for creating custom ERD relationships."""
+    table1: str
+    column1: str
+    table2: str
+    column2: str
+    relationship_type: str  # 'foreign_key', 'hierarchy', 'join', etc.
+    confidence: float
+    description: Optional[str] = None
+
 # Dependency for database manager
 def get_db_manager():
     return DatabaseManager()
@@ -547,4 +585,522 @@ async def analyze_all():
         
     except Exception as e:
         logger.error(f"Error during comprehensive analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.put("/erd/edit")
+async def edit_erd_relationship(request: ERDRelationshipEditRequest):
+    """
+    Edit ERD relationship metadata for a specific table.
+    
+    Args:
+        request: ERDRelationshipEditRequest containing table and relationship updates
+        
+    Returns:
+        Dict[str, Any]: Updated ERD metadata
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # Check if ERD metadata exists for this table
+        check_query = f"""
+        SELECT table_name, version
+        FROM metadata.erd
+        WHERE table_name = '{request.table_name}'
+        ORDER BY version DESC
+        LIMIT 1
+        """
+        
+        existing = db_manager.execute_query(check_query)
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"ERD metadata for table '{request.table_name}' not found")
+        
+        existing_record = existing[0]
+        current_version = existing_record["version"]
+        new_version = int(datetime.now().timestamp() * 1000000)
+        
+        # Build update fields
+        update_fields = []
+        if request.table_type is not None:
+            update_fields.append(f"table_type = '{request.table_type}'")
+        if request.primary_key_candidates is not None:
+            update_fields.append(f"primary_key_candidates = {repr(request.primary_key_candidates)}")
+        if request.fact_columns is not None:
+            update_fields.append(f"fact_columns = {repr(request.fact_columns)}")
+        if request.dimension_columns is not None:
+            update_fields.append(f"dimension_columns = {repr(request.dimension_columns)}")
+        if request.relationships is not None:
+            update_fields.append(f"relationships = {repr(request.relationships)}")
+        
+        if not update_fields:
+            raise HTTPException(status_code=400, detail="No fields provided for update")
+        
+        # Insert updated record (upsert)
+        insert_sql = f"""
+        INSERT INTO metadata.erd (
+            table_name, table_type, row_count, column_count,
+            primary_key_candidates, fact_columns, dimension_columns,
+            relationships, analysis_timestamp, version
+        ) VALUES (
+            '{request.table_name}',
+            '{request.table_type or 'unknown'}',
+            0, 0,
+            {repr(request.primary_key_candidates) if request.primary_key_candidates else "'[]'"},
+            {repr(request.fact_columns) if request.fact_columns else "'[]'"},
+            {repr(request.dimension_columns) if request.dimension_columns else "'[]'"},
+            {repr(request.relationships) if request.relationships else "'[]'"},
+            '{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}',
+            {new_version}
+        )
+        """
+        
+        db_manager.execute_query(insert_sql)
+        
+        return {
+            "status": "success",
+            "message": f"ERD metadata updated for table '{request.table_name}'",
+            "table_name": request.table_name,
+            "version": new_version,
+            "updated_fields": [field.split(' = ')[0] for field in update_fields]
+        }
+        
+    except Exception as e:
+        logger.error(f"Error editing ERD relationship: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.put("/hierarchies/edit")
+async def edit_hierarchy(request: HierarchyEditRequest):
+    """
+    Edit hierarchy metadata for a specific table.
+    
+    Args:
+        request: HierarchyEditRequest containing hierarchy updates
+        
+    Returns:
+        Dict[str, Any]: Updated hierarchy metadata
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # Check if hierarchy metadata exists for this table
+        check_query = f"""
+        SELECT table_name, version
+        FROM metadata.hierarchies
+        WHERE table_name = '{request.table_name}'
+        ORDER BY version DESC
+        LIMIT 1
+        """
+        
+        existing = db_manager.execute_query(check_query)
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Hierarchy metadata for table '{request.table_name}' not found")
+        
+        existing_record = existing[0]
+        current_version = existing_record["version"]
+        new_version = int(datetime.now().timestamp() * 1000000)
+        
+        # Build update fields
+        update_fields = []
+        if request.hierarchy_name is not None:
+            update_fields.append(f"hierarchy_name = '{request.hierarchy_name}'")
+        if request.root_column is not None:
+            update_fields.append(f"root_column = '{request.root_column}'")
+        if request.leaf_column is not None:
+            update_fields.append(f"leaf_column = '{request.leaf_column}'")
+        if request.intermediate_levels is not None:
+            update_fields.append(f"intermediate_levels = {repr(request.intermediate_levels)}")
+        if request.parent_child_relationships is not None:
+            update_fields.append(f"parent_child_relationships = {repr(request.parent_child_relationships)}")
+        if request.sibling_relationships is not None:
+            update_fields.append(f"sibling_relationships = {repr(request.sibling_relationships)}")
+        if request.cross_hierarchy_relationships is not None:
+            update_fields.append(f"cross_hierarchy_relationships = {repr(request.cross_hierarchy_relationships)}")
+        
+        if not update_fields:
+            raise HTTPException(status_code=400, detail="No fields provided for update")
+        
+        # Insert updated record (upsert)
+        insert_sql = f"""
+        INSERT INTO metadata.hierarchies (
+            table_name, original_table_name, hierarchy_name, total_levels,
+            root_column, root_cardinality, leaf_column, leaf_cardinality,
+            intermediate_levels, parent_child_relationships, sibling_relationships,
+            cross_hierarchy_relationships, analysis_timestamp, version
+        ) VALUES (
+            '{request.table_name}',
+            '{request.table_name}',
+            '{request.hierarchy_name or 'custom_hierarchy'}',
+            0,
+            '{request.root_column or ''}',
+            0,
+            '{request.leaf_column or ''}',
+            0,
+            {repr(request.intermediate_levels) if request.intermediate_levels else "'[]'"},
+            {repr(request.parent_child_relationships) if request.parent_child_relationships else "'[]'"},
+            {repr(request.sibling_relationships) if request.sibling_relationships else "'[]'"},
+            {repr(request.cross_hierarchy_relationships) if request.cross_hierarchy_relationships else "'[]'"},
+            '{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}',
+            {new_version}
+        )
+        """
+        
+        db_manager.execute_query(insert_sql)
+        
+        return {
+            "status": "success",
+            "message": f"Hierarchy metadata updated for table '{request.table_name}'",
+            "table_name": request.table_name,
+            "version": new_version,
+            "updated_fields": [field.split(' = ')[0] for field in update_fields]
+        }
+        
+    except Exception as e:
+        logger.error(f"Error editing hierarchy: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.post("/hierarchies/create")
+async def create_hierarchy(request: HierarchyCreateRequest):
+    """
+    Create a custom hierarchy for a specific table.
+    
+    Args:
+        request: HierarchyCreateRequest containing hierarchy definition
+        
+    Returns:
+        Dict[str, Any]: Created hierarchy metadata
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # Validate that the table exists in Stage 2
+        table_check = f"""
+        SELECT name FROM system.tables 
+        WHERE database = 'silver' AND name LIKE '%_stage2'
+        AND name = '{request.table_name}_stage2'
+        """
+        
+        table_exists = db_manager.execute_query(table_check)
+        if not table_exists:
+            raise HTTPException(status_code=404, detail=f"Stage 2 table '{request.table_name}_stage2' not found")
+        
+        # Calculate hierarchy properties
+        total_levels = len(request.levels)
+        root_column = request.levels[0]['column_name'] if request.levels else None
+        leaf_column = request.levels[-1]['column_name'] if request.levels else None
+        
+        # Build relationships from levels
+        parent_child_relationships = []
+        for i in range(len(request.levels) - 1):
+            parent_child_relationships.append({
+                'parent_column': request.levels[i]['column_name'],
+                'child_column': request.levels[i + 1]['column_name'],
+                'level': i + 1
+            })
+        
+        # Generate version number
+        new_version = int(datetime.now().timestamp() * 1000000)
+        
+        # Insert new hierarchy
+        insert_sql = f"""
+        INSERT INTO metadata.hierarchies (
+            table_name, original_table_name, hierarchy_name, total_levels,
+            root_column, root_cardinality, leaf_column, leaf_cardinality,
+            intermediate_levels, parent_child_relationships, sibling_relationships,
+            cross_hierarchy_relationships, analysis_timestamp, version
+        ) VALUES (
+            '{request.table_name}',
+            '{request.table_name}',
+            '{request.hierarchy_name}',
+            {total_levels},
+            '{root_column or ''}',
+            0,
+            '{leaf_column or ''}',
+            0,
+            {repr(request.levels)},
+            {repr(parent_child_relationships)},
+            '[]',
+            '[]',
+            '{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}',
+            {new_version}
+        )
+        """
+        
+        db_manager.execute_query(insert_sql)
+        
+        return {
+            "status": "success",
+            "message": f"Custom hierarchy '{request.hierarchy_name}' created for table '{request.table_name}'",
+            "table_name": request.table_name,
+            "hierarchy_name": request.hierarchy_name,
+            "total_levels": total_levels,
+            "root_column": root_column,
+            "leaf_column": leaf_column,
+            "version": new_version
+        }
+        
+    except Exception as e:
+        logger.error(f"Error creating hierarchy: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.post("/erd/create")
+async def create_erd_relationship(request: ERDRelationshipCreateRequest):
+    """
+    Create a custom ERD relationship between two tables/columns.
+    
+    Args:
+        request: ERDRelationshipCreateRequest containing relationship definition
+        
+    Returns:
+        Dict[str, Any]: Created ERD relationship metadata
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # Validate that both tables exist in Stage 2
+        table_check = f"""
+        SELECT name FROM system.tables 
+        WHERE database = 'silver' AND name LIKE '%_stage2'
+        AND (name = '{request.table1}_stage2' OR name = '{request.table2}_stage2')
+        """
+        
+        tables_exist = db_manager.execute_query(table_check)
+        if len(tables_exist) < 2:
+            raise HTTPException(status_code=404, detail=f"One or both Stage 2 tables not found: {request.table1}_stage2, {request.table2}_stage2")
+        
+        # Generate version number
+        new_version = int(datetime.now().timestamp() * 1000000)
+        
+        # Create relationship object
+        relationship = {
+            'table1': request.table1,
+            'column1': request.column1,
+            'table2': request.table2,
+            'column2': request.column2,
+            'relationship_type': request.relationship_type,
+            'confidence': request.confidence,
+            'description': request.description or '',
+            'created_by': 'user',
+            'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        # Check if ERD metadata exists for table1
+        check_query = f"""
+        SELECT table_name, primary_key_candidates, fact_columns, dimension_columns, relationships
+        FROM metadata.erd
+        WHERE table_name = '{request.table1}'
+        ORDER BY version DESC
+        LIMIT 1
+        """
+        
+        existing = db_manager.execute_query(check_query)
+        
+        if existing:
+            # Update existing ERD metadata
+            existing_record = existing[0]
+            existing_relationships = existing_record.get('relationships', [])
+            existing_relationships.append(relationship)
+            
+            insert_sql = f"""
+            INSERT INTO metadata.erd (
+                table_name, table_type, row_count, column_count,
+                primary_key_candidates, fact_columns, dimension_columns,
+                relationships, analysis_timestamp, version
+            ) VALUES (
+                '{request.table1}',
+                '{existing_record.get('table_type', 'unknown')}',
+                {existing_record.get('row_count', 0)},
+                {existing_record.get('column_count', 0)},
+                {repr(existing_record.get('primary_key_candidates', []))},
+                {repr(existing_record.get('fact_columns', []))},
+                {repr(existing_record.get('dimension_columns', []))},
+                {repr(existing_relationships)},
+                '{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}',
+                {new_version}
+            )
+            """
+        else:
+            # Create new ERD metadata
+            insert_sql = f"""
+            INSERT INTO metadata.erd (
+                table_name, table_type, row_count, column_count,
+                primary_key_candidates, fact_columns, dimension_columns,
+                relationships, analysis_timestamp, version
+            ) VALUES (
+                '{request.table1}',
+                'unknown',
+                0, 0,
+                '[]',
+                '[]',
+                '[]',
+                {repr([relationship])},
+                '{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}',
+                {new_version}
+            )
+            """
+        
+        db_manager.execute_query(insert_sql)
+        
+        return {
+            "status": "success",
+            "message": f"ERD relationship created between {request.table1}.{request.column1} and {request.table2}.{request.column2}",
+            "relationship": relationship,
+            "version": new_version
+        }
+        
+    except Exception as e:
+        logger.error(f"Error creating ERD relationship: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.delete("/erd/relationships/{table_name}")
+async def delete_erd_relationships(table_name: str, relationship_id: Optional[str] = None):
+    """
+    Delete ERD relationships for a table or specific relationship.
+    
+    Args:
+        table_name: Name of the table
+        relationship_id: Optional specific relationship ID to delete
+        
+    Returns:
+        Dict[str, Any]: Deletion confirmation
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # Get current ERD metadata
+        check_query = f"""
+        SELECT table_name, relationships, version
+        FROM metadata.erd
+        WHERE table_name = '{table_name}'
+        ORDER BY version DESC
+        LIMIT 1
+        """
+        
+        existing = db_manager.execute_query(check_query)
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"ERD metadata for table '{table_name}' not found")
+        
+        existing_record = existing[0]
+        current_relationships = existing_record.get('relationships', [])
+        
+        if relationship_id:
+            # Delete specific relationship
+            filtered_relationships = [
+                rel for rel in current_relationships 
+                if rel.get('id') != relationship_id
+            ]
+            deleted_count = len(current_relationships) - len(filtered_relationships)
+        else:
+            # Delete all relationships
+            filtered_relationships = []
+            deleted_count = len(current_relationships)
+        
+        # Generate new version
+        new_version = int(datetime.now().timestamp() * 1000000)
+        
+        # Insert updated record
+        insert_sql = f"""
+        INSERT INTO metadata.erd (
+            table_name, table_type, row_count, column_count,
+            primary_key_candidates, fact_columns, dimension_columns,
+            relationships, analysis_timestamp, version
+        ) VALUES (
+            '{table_name}',
+            '{existing_record.get('table_type', 'unknown')}',
+            {existing_record.get('row_count', 0)},
+            {existing_record.get('column_count', 0)},
+            {repr(existing_record.get('primary_key_candidates', []))},
+            {repr(existing_record.get('fact_columns', []))},
+            {repr(existing_record.get('dimension_columns', []))},
+            {repr(filtered_relationships)},
+            '{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}',
+            {new_version}
+        )
+        """
+        
+        db_manager.execute_query(insert_sql)
+        
+        return {
+            "status": "success",
+            "message": f"Deleted {deleted_count} relationship(s) from table '{table_name}'",
+            "table_name": table_name,
+            "deleted_count": deleted_count,
+            "remaining_relationships": len(filtered_relationships),
+            "version": new_version
+        }
+        
+    except Exception as e:
+        logger.error(f"Error deleting ERD relationships: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.delete("/hierarchies/{table_name}")
+async def delete_hierarchy(table_name: str, hierarchy_name: Optional[str] = None):
+    """
+    Delete hierarchy metadata for a table or specific hierarchy.
+    
+    Args:
+        table_name: Name of the table
+        hierarchy_name: Optional specific hierarchy name to delete
+        
+    Returns:
+        Dict[str, Any]: Deletion confirmation
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # Get current hierarchy metadata
+        check_query = f"""
+        SELECT table_name, hierarchy_name, version
+        FROM metadata.hierarchies
+        WHERE table_name = '{table_name}'
+        ORDER BY version DESC
+        LIMIT 1
+        """
+        
+        existing = db_manager.execute_query(check_query)
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Hierarchy metadata for table '{table_name}' not found")
+        
+        existing_record = existing[0]
+        
+        if hierarchy_name and existing_record.get('hierarchy_name') != hierarchy_name:
+            raise HTTPException(status_code=404, detail=f"Hierarchy '{hierarchy_name}' not found for table '{table_name}'")
+        
+        # Generate new version
+        new_version = int(datetime.now().timestamp() * 1000000)
+        
+        # Insert "deleted" record (soft delete by setting empty values)
+        insert_sql = f"""
+        INSERT INTO metadata.hierarchies (
+            table_name, original_table_name, hierarchy_name, total_levels,
+            root_column, root_cardinality, leaf_column, leaf_cardinality,
+            intermediate_levels, parent_child_relationships, sibling_relationships,
+            cross_hierarchy_relationships, analysis_timestamp, version
+        ) VALUES (
+            '{table_name}',
+            '{table_name}',
+            'DELETED',
+            0,
+            '',
+            0,
+            '',
+            0,
+            '[]',
+            '[]',
+            '[]',
+            '[]',
+            '{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}',
+            {new_version}
+        )
+        """
+        
+        db_manager.execute_query(insert_sql)
+        
+        return {
+            "status": "success",
+            "message": f"Hierarchy metadata deleted for table '{table_name}'",
+            "table_name": table_name,
+            "version": new_version
+        }
+        
+    except Exception as e:
+        logger.error(f"Error deleting hierarchy: {e}")
         raise HTTPException(status_code=500, detail=str(e))
