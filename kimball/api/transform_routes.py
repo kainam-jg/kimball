@@ -31,12 +31,30 @@ from ..core.database import DatabaseManager
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Create router for Transformation Phase API endpoints
+# Create router for Transform Phase API endpoints
 transform_router = APIRouter(prefix="/api/v1/transform", tags=["Transform"])
 
 # Pydantic models for request/response validation
 class UDFRequest(BaseModel):
-    """Request model for creating/updating UDFs."""
+    """
+    Request model for creating/updating UDFs.
+    
+    This model defines the structure for UDF creation requests, including
+    the new source/target tracking fields for Gold layer transformations.
+    
+    Attributes:
+        transformation_stage: Stage identifier (stage1, stage2, stage3)
+        udf_name: Unique name for the UDF
+        udf_number: Execution order number within the stage
+        udf_logic: SQL transformation logic
+        udf_schema_name: Schema where UDF is stored (default: 'default')
+        dependencies: List of dependent UDF names
+        execution_frequency: How often to run (daily, hourly, etc.)
+        source_schema: Source schema for Gold layer transformations (e.g., 'silver')
+        source_table: Source table for Gold layer transformations (e.g., 'dealers_stage2')
+        target_schema: Target schema for Gold layer transformations (e.g., 'gold')
+        target_table: Target table for Gold layer transformations (e.g., 'dealers_dim')
+    """
     transformation_stage: str
     udf_name: str
     udf_number: int
@@ -50,7 +68,18 @@ class UDFRequest(BaseModel):
     target_table: Optional[str] = None
 
 class UDFUpdateRequest(BaseModel):
-    """Request model for updating existing UDFs."""
+    """
+    Request model for updating existing UDFs.
+    
+    This model allows partial updates to existing UDFs. All fields are optional,
+    and only provided fields will be updated.
+    
+    Attributes:
+        udf_logic: Updated SQL transformation logic
+        udf_schema_name: Updated schema name
+        dependencies: Updated list of dependent UDF names
+        execution_frequency: Updated execution frequency
+    """
     udf_logic: Optional[str] = None
     udf_schema_name: Optional[str] = None
     dependencies: Optional[List[str]] = None
@@ -80,15 +109,33 @@ class TransformationStatus(BaseModel):
 # API Endpoints
 
 @transform_router.get("/status")
-async def get_transformation_status():
+async def get_transform_status():
     """
-    Get overall transformation phase status.
+    Get the current status of the Transform Phase.
+    
+    This endpoint provides comprehensive status information about the Transform Phase,
+    including UDF counts by stage and schema, total counts, and phase information.
     
     Returns:
-        - Current phase status and description
-        - UDF counts by stage and schema
-        - Total UDFs and schemas
-        - Active transformation metrics
+        Dict containing:
+            - status: Current phase status (active/inactive)
+            - phase: Phase name (Transform)
+            - description: Phase description
+            - udf_counts_by_stage: Dictionary of UDF counts by transformation stage
+            - udf_counts_by_schema: Dictionary of UDF counts by schema
+            - total_udfs: Total number of UDFs across all stages
+            - total_schemas: Total number of schemas with UDFs
+    
+    Example Response:
+        {
+            "status": "active",
+            "phase": "Transform",
+            "description": "ELT transformation orchestration with ClickHouse UDFs",
+            "udf_counts_by_stage": {"stage1": 4, "stage2": 4, "stage3": 2},
+            "udf_counts_by_schema": {"default": 10},
+            "total_udfs": 10,
+            "total_schemas": 1
+        }
     """
     try:
         db_manager = DatabaseManager()
@@ -140,14 +187,41 @@ async def get_udfs(
     """
     Get all UDFs or filter by stage/schema.
     
+    This endpoint retrieves UDFs from the metadata.transformation1 table with optional
+    filtering by transformation stage and schema. It now includes the new source/target
+    tracking fields for Gold layer transformations.
+    
     Parameters:
-        - stage: Filter UDFs by transformation stage (e.g., 'stage1', 'stage2')
+        - stage: Filter UDFs by transformation stage (e.g., 'stage1', 'stage2', 'stage3')
         - schema: Filter UDFs by schema name (e.g., 'default', 'custom')
         - limit: Maximum number of UDFs to return (default: 100)
     
     Returns:
-        - List of UDFs with metadata
-        - Total count and filter information
+        Dict containing:
+            - status: Success status
+            - udfs: List of UDF objects with full metadata including source/target fields
+            - total_count: Total number of UDFs returned
+            - filtered_by_stage: Stage filter applied (if any)
+            - filtered_by_schema: Schema filter applied (if any)
+    
+    Example Response:
+        {
+            "status": "success",
+            "udfs": [
+                {
+                    "transformation_stage": "stage3",
+                    "udf_name": "create_dealers_dim",
+                    "source_schema": "silver",
+                    "source_table": "dealers_stage2",
+                    "target_schema": "gold",
+                    "target_table": "dealers_dim",
+                    ...
+                }
+            ],
+            "total_count": 1,
+            "filtered_by_stage": "stage3",
+            "filtered_by_schema": null
+        }
     """
     try:
         db_manager = DatabaseManager()
@@ -200,7 +274,41 @@ async def get_udfs(
 
 @transform_router.get("/udfs/{udf_name}")
 async def get_udf_by_name(udf_name: str):
-    """Get a specific UDF by name."""
+    """
+    Get a specific UDF by name.
+    
+    This endpoint retrieves a single UDF from the metadata.transformation1 table
+    by its unique name. It returns the latest version of the UDF including all
+    metadata fields, including the new source/target tracking fields.
+    
+    Parameters:
+        - udf_name: The unique name of the UDF to retrieve
+    
+    Returns:
+        Dict containing:
+            - status: Success status
+            - udf: Complete UDF object with all metadata fields
+    
+    Raises:
+        - HTTPException 404: If UDF with the given name is not found
+        - HTTPException 500: If database error occurs
+    
+    Example Response:
+        {
+            "status": "success",
+            "udf": {
+                "transformation_stage": "stage3",
+                "udf_name": "create_dealers_dim",
+                "udf_logic": "INSERT INTO gold.dealers_dim SELECT ...",
+                "source_schema": "silver",
+                "source_table": "dealers_stage2",
+                "target_schema": "gold",
+                "target_table": "dealers_dim",
+                "version": 1761576375390212,
+                ...
+            }
+        }
+    """
     try:
         db_manager = DatabaseManager()
         
@@ -246,20 +354,37 @@ async def create_udf(request: UDFRequest):
     Create a new UDF with metadata.
     
     This endpoint creates a new UDF entry in the metadata.transformation1 table.
-    The UDF logic is stored as SQL text and can be executed later.
+    The UDF logic is stored as SQL text and can be executed later. This function
+    now supports the new source/target tracking fields for Gold layer transformations.
     
     Parameters:
-        - transformation_stage: Stage identifier (e.g., 'stage1', 'stage2')
+        - transformation_stage: Stage identifier (e.g., 'stage1', 'stage2', 'stage3')
         - udf_name: Unique name for the UDF
-        - udf_number: Execution order number
+        - udf_number: Execution order number within the stage
         - udf_logic: SQL transformation logic
         - udf_schema_name: Schema where UDF is stored (default: 'default')
-        - dependencies: List of dependent UDFs
+        - dependencies: List of dependent UDF names
         - execution_frequency: How often to run (e.g., 'daily', 'hourly')
+        - source_schema: Source schema for Gold layer transformations (optional)
+        - source_table: Source table for Gold layer transformations (optional)
+        - target_schema: Target schema for Gold layer transformations (optional)
+        - target_table: Target table for Gold layer transformations (optional)
     
     Returns:
         - Success message with UDF details
         - New version number for upsert functionality
+    
+    Example Request:
+        {
+            "transformation_stage": "stage3",
+            "udf_name": "create_dealers_dim",
+            "udf_number": 1,
+            "udf_logic": "INSERT INTO gold.dealers_dim SELECT ...",
+            "source_schema": "silver",
+            "source_table": "dealers_stage2",
+            "target_schema": "gold",
+            "target_table": "dealers_dim"
+        }
     """
     try:
         db_manager = DatabaseManager()
@@ -316,7 +441,34 @@ async def create_udf(request: UDFRequest):
 
 @transform_router.put("/udfs/{udf_name}")
 async def update_udf(udf_name: str, request: UDFUpdateRequest):
-    """Update an existing UDF."""
+    """
+    Update an existing UDF.
+    
+    This endpoint updates an existing UDF in the metadata.transformation1 table.
+    It uses upsert functionality with version control to maintain audit trails.
+    Only provided fields in the request will be updated.
+    
+    Parameters:
+        - udf_name: The unique name of the UDF to update
+        - request: UDFUpdateRequest containing fields to update
+    
+    Returns:
+        Dict containing:
+            - status: Success status
+            - message: Success message
+            - udf_name: Name of the updated UDF
+            - version: New version number
+    
+    Raises:
+        - HTTPException 404: If UDF with the given name is not found
+        - HTTPException 500: If database error occurs
+    
+    Example Request:
+        {
+            "udf_logic": "INSERT INTO gold.dealers_dim SELECT ...",
+            "execution_frequency": "hourly"
+        }
+    """
     try:
         db_manager = DatabaseManager()
         
@@ -528,12 +680,38 @@ async def execute_stage1_transformations():
     Execute all Stage 1 transformations (Bronze to Silver).
     
     This endpoint executes all UDFs in the 'stage1' transformation stage.
-    It processes transformations in order and provides detailed results.
+    Stage 1 transformations convert raw bronze layer data to cleaned silver layer data,
+    including data type conversions, column renaming, and basic data cleaning.
+    
+    Process:
+    1. Retrieves all Stage 1 UDFs from metadata.transformation1
+    2. Executes UDFs in order by udf_number
+    3. Processes each UDF's SQL logic
+    4. Returns detailed execution results
     
     Returns:
-        - Execution results for each UDF
-        - Total records processed
-        - Execution times and error information
+        Dict containing:
+            - status: Success status
+            - message: Execution summary message
+            - transformations_executed: Number of UDFs executed
+            - total_records_processed: Total records processed across all UDFs
+            - results: List of detailed results for each UDF
+    
+    Example Response:
+        {
+            "status": "success",
+            "message": "Stage 1 transformations completed",
+            "transformations_executed": 4,
+            "total_records_processed": 1500000,
+            "results": [
+                {
+                    "udf_name": "transform_daily_sales_to_silver",
+                    "status": "success",
+                    "records_processed": 500000,
+                    "execution_time": 2.5
+                }
+            ]
+        }
     """
     try:
         db_manager = DatabaseManager()
@@ -611,18 +789,44 @@ async def execute_stage2_transformations():
     Execute all Stage 2 transformations (Silver Stage1 to Silver Stage2 CDC).
     
     This endpoint executes all UDFs in the 'stage2' transformation stage.
-    It implements CDC (Change Data Capture) logic using create_date for change detection.
+    Stage 2 implements CDC (Change Data Capture) to maintain current data in the silver layer,
+    creating _stage2 suffixed tables with the most recent version of each record.
     
     CDC Process:
-    1. Creates Stage 2 tables with ReplacingMergeTree engine
-    2. Inserts/updates records from Stage 1 to Stage 2
-    3. Uses create_date as version for deduplication
-    4. Optimizes tables to merge duplicates
+    1. Creates Stage 2 tables with MergeTree engine (no deduplication)
+    2. Drops existing Stage 2 tables to ensure clean data
+    3. Inserts all records from Stage 1 to Stage 2
+    4. Maintains data freshness and handles updates
+    
+    Key Features:
+    - Handles multi-statement SQL by splitting on semicolons
+    - Executes each statement separately (ClickHouse limitation)
+    - Provides detailed execution results and error handling
+    - Maintains audit trails and execution metrics
     
     Returns:
-        - Execution results for each UDF
-        - Total records processed
-        - Execution times and error information
+        Dict containing:
+            - status: Success status
+            - message: Execution summary message
+            - transformations_executed: Number of UDFs executed
+            - total_records_processed: Total records processed across all UDFs
+            - results: List of detailed results for each UDF
+    
+    Example Response:
+        {
+            "status": "success",
+            "message": "Stage 2 CDC transformations completed",
+            "transformations_executed": 4,
+            "total_records_processed": 1500000,
+            "results": [
+                {
+                    "udf_name": "transform_daily_sales_stage2_cdc",
+                    "status": "success",
+                    "records_processed": 500000,
+                    "execution_time": 1.8
+                }
+            ]
+        }
     """
     try:
         db_manager = DatabaseManager()

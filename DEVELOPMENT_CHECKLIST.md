@@ -1,4 +1,4 @@
-# KIMBALL Development Checklist - TRANSFORMATION PHASE IN PROGRESS 🔄
+# KIMBALL Development Checklist - TRANSFORM PHASE COMPLETE ✅
 
 ## 🎉 **DISCOVERY PHASE COMPLETION SUMMARY**
 
@@ -35,14 +35,17 @@
 - **Version Control**: Microsecond-precision versioning for proper deduplication
 - **Combined Updates**: Support for updating both table and column names in single request
 
-## 🔄 **TRANSFORMATION PHASE IN PROGRESS**
+## ✅ **TRANSFORM PHASE COMPLETE**
 
-### **✅ ELT TRANSFORMATION ARCHITECTURE**
+### **✅ ELT TRANSFORM ARCHITECTURE**
 - **ClickHouse UDFs**: SQL-based transformation functions stored in `metadata.transformation1`
 - **Multi-Stage Processing**: Bronze → Silver → Gold with stage-specific transformations
 - **Metadata-Driven Transformations**: UDF logic stored with dependencies and execution frequency
 - **Schema Management**: `udf_schema_name` column for organizing UDFs by schema
+- **Source/Target Tracking**: New columns for Gold layer transformations (source_schema, source_table, target_schema, target_table)
 - **Stage 1 Implementation**: Data type conversion and name transformation from bronze to silver
+- **Stage 2 CDC Implementation**: Change Data Capture with _stage2 suffixed tables
+- **Gold Layer Ready**: Architecture prepared for Stage 3 dimensional model creation
 
 ### **✅ STAGE 1 TRANSFORMATIONS**
 - **Data Type Conversion**: String → Date, DateTime, Float64, Int64 based on intelligent inference
@@ -50,12 +53,20 @@
 - **Silver Layer Creation**: Tables created with `_stage1` suffix
 - **Performance**: 3,193,140 records transformed in <1 second
 
-### **✅ TRANSFORMATION API ENDPOINTS**
-- **UDF Management**: Create, read, update UDFs via REST API
+### **✅ STAGE 2 CDC TRANSFORMATIONS**
+- **Change Data Capture**: Implements CDC logic for maintaining current data
+- **Stage 2 Tables**: Creates `_stage2` suffixed tables with MergeTree engine
+- **Data Freshness**: Ensures most recent version of each record
+- **Multi-Statement Support**: Handles ClickHouse's multi-statement limitation
+- **Clean Data Strategy**: Drops and recreates tables to avoid deduplication issues
+
+### **✅ TRANSFORM API ENDPOINTS**
+- **UDF Management**: Create, read, update UDFs via REST API with comprehensive documentation
 - **Schema Management**: Organize UDFs by schema with filtering capabilities
-- **Transformation Orchestration**: Execute all Stage 1 transformations
+- **Transform Orchestration**: Execute all Stage 1 and Stage 2 transformations
 - **UDF Creation**: Create actual UDF functions in ClickHouse
 - **Status Monitoring**: Real-time transformation status and metrics
+- **Gold Layer Support**: Ready for Stage 3 UDF creation with source/target tracking
 
 ### **📊 TRANSFORMATION METRICS**
 - **UDFs Created**: 4 Stage 1 UDFs for all bronze tables
@@ -71,29 +82,62 @@
 - **Monitoring**: Advanced logging and alerting
 - **Schema Expansion**: Support for multiple UDF schemas
 
-## 🏗️ **MODEL PHASE IN PROGRESS**
+## ✅ **MODEL PHASE COMPLETE**
 
-## 🧠 **INTELLIGENT TYPE INFERENCE ARCHITECTURE**
+### **✅ ERD ANALYSIS**
+- **Entity Relationship Discovery**: Automatic detection of table relationships and foreign keys
+- **Primary Key Detection**: Identifies potential primary keys based on cardinality and uniqueness
+- **Fact vs Dimension Classification**: Automatically classifies tables as fact or dimension tables
+- **Join Relationship Detection**: Discovers potential join relationships between tables
+- **Confidence Scoring**: Provides confidence scores for all discovered relationships
+- **Metadata Storage**: Stores ERD metadata in `metadata.erd` table with version control
 
-### **Hybrid Detection Strategy**
-- ✅ **Rule-Based Pattern Matching**: Fast detection for obvious patterns
-- ✅ **Statistical Analysis**: Multi-factor analysis for numeric measures
-- ✅ **Confidence Scoring**: Combines multiple signals for final classification
-- ✅ **Learning System**: Online learning from user corrections
-- ✅ **Performance Optimization**: Caching and smart sampling
+### **✅ HIERARCHY ANALYSIS**
+- **Dimensional Hierarchy Discovery**: Builds OLAP-style level-based hierarchies (ROOT to LEAF)
+- **Cardinality-Based Levels**: Uses cardinality analysis to determine hierarchy levels
+- **Parent-Child Relationships**: Identifies parent-child relationships within hierarchies
+- **Sibling Detection**: Finds sibling relationships at the same hierarchy level
+- **Cross-Hierarchy Analysis**: Discovers relationships between different hierarchies
+- **Metadata Storage**: Stores hierarchy metadata in `metadata.hierarchies` table
 
-### **Supported Patterns**
-- ✅ **Date Patterns**: YYYYMMDD (90% confidence), YYYY-MM-DD (95% confidence), MM/DD/YYYY (90% confidence)
-- ✅ **Numeric Patterns**: Decimal (84% confidence), Integer, Currency, Percentage, Scientific notation
-- ✅ **String Detection**: Default classification with high confidence when no patterns match
+### **✅ MODEL PHASE API ENDPOINTS**
+- **ERD Analysis**: `POST /api/v1/model/erd/analyze` - Analyze ERD relationships
+- **Hierarchy Analysis**: `POST /api/v1/model/hierarchies/analyze` - Analyze hierarchies
+- **Metadata Retrieval**: `GET /api/v1/model/erd/metadata` and `GET /api/v1/model/hierarchies/metadata`
+- **Relationship Management**: `GET /api/v1/model/erd/relationships` and `GET /api/v1/model/hierarchies/levels`
+- **Editing Capabilities**: `PUT /api/v1/model/erd/edit` and `PUT /api/v1/model/hierarchies/edit`
+- **Custom Creation**: `POST /api/v1/model/erd/create` and `POST /api/v1/model/hierarchies/create`
+- **Deletion Management**: `DELETE /api/v1/model/erd/relationships/{table_name}` and `DELETE /api/v1/model/hierarchies/{table_name}`
 
-### **Learning Capabilities**
-- ✅ **Pattern Success Tracking**: Tracks success rates for each pattern type
-- ✅ **User Correction Learning**: API endpoint for learning from corrections
-- ✅ **Confidence Adjustment**: Less aggressive learning adjustments (0.8 + 0.2 * success_rate)
-- ✅ **Performance Monitoring**: Cache hit rates and request tracking
+### **✅ EDITING AND CUSTOMIZATION**
+- **ERD Relationship Editing**: Modify table types, primary keys, fact/dimension columns, and relationships
+- **Hierarchy Editing**: Customize hierarchy names, root/leaf columns, and level structures
+- **Custom Relationship Creation**: Create user-defined ERD relationships between any tables/columns
+- **Custom Hierarchy Creation**: Build custom dimensional hierarchies with specific level definitions
+- **Soft Deletion**: Remove relationships and hierarchies while preserving audit history
+- **Bulk Operations**: Update multiple relationships or hierarchy levels in single operations
 
-## 🎉 **ACQUIRE PHASE COMPLETION SUMMARY**
+## 🏗️ **CURRENT ARCHITECTURE - 4 PHASE STRUCTURE**
+
+### **✅ PHASE RESTRUCTURING COMPLETE**
+- **Acquire Phase**: Data source management and extraction (S3, PostgreSQL, APIs)
+- **Discover Phase**: Intelligent data discovery and profiling with type inference
+- **Transform Phase**: ELT transformations and UDF orchestration (Bronze → Silver → Gold)
+- **Model Phase**: Dimensional modeling and relationship discovery (ERD, Hierarchies)
+
+### **✅ GOLD LAYER ARCHITECTURE READY**
+- **Dimension Tables**: `_dim` suffix (e.g., `dealers_dim`, `vehicles_dim`)
+- **Fact Tables**: `_fact` suffix (e.g., `sales_fact`)
+- **Star Schema**: Traditional dimensional modeling structure
+- **Stage 3 UDFs**: Ready for Silver Stage 2 → Gold dimensional model transformation
+- **Metadata-Driven**: Uses Model Phase ERD and hierarchy analysis for transformation logic
+- **Source/Target Tracking**: New columns in `metadata.transformation1` track source and target schemas/tables
+
+### **✅ BUILD PHASE INTEGRATION**
+- **Build Phase Removed**: Functionality integrated into Transform Phase
+- **Pipeline Generation**: Now handled by Transform Phase UDF orchestration
+- **Orchestration**: Managed through Transform Phase dependency management
+- **Monitoring**: Integrated into Transform Phase status and execution endpoints
 
 ### **✅ FULLY IMPLEMENTED & TESTED**
 - **Data Source Management**: Complete CRUD operations for all source types
