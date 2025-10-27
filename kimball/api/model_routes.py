@@ -1,232 +1,363 @@
+#!/usr/bin/env python3
 """
-KIMBALL Model Phase API Routes
-
-This module provides FastAPI routes for the Model phase:
-- ERD generation and editing
-- Hierarchy modeling
-- Star schema design
-- Schema transformation
+Model Phase API Routes
+Handles ELT transformation orchestration, UDF management, and metadata-driven transformations.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from typing import Dict, List, Any, Optional
-import json
+from typing import List, Optional, Dict, Any
 from datetime import datetime
+import logging
 
-from ..model.erd_generator import ERDGenerator
-from ..model.hierarchy_modeler import HierarchyModeler
-from ..model.star_schema_designer import StarSchemaDesigner
-from ..model.schema_transformer import SchemaTransformer
-from ..core.logger import Logger
+from ..core.database import DatabaseManager
 
-# Initialize router
-model_router = APIRouter()
-logger = Logger()
+# Configure logging
+logger = logging.getLogger(__name__)
 
-# Pydantic models for request/response
-class ERDRequest(BaseModel):
-    """Request model for ERD generation."""
-    catalog_id: str
-    include_relationships: bool = True
-    include_attributes: bool = True
+# Create router
+model_router = APIRouter(prefix="/api/v1/model", tags=["Model"])
 
-class HierarchyRequest(BaseModel):
-    """Request model for hierarchy modeling."""
-    catalog_id: str
-    hierarchy_config: Dict[str, Any]
+# Pydantic models
+class UDFRequest(BaseModel):
+    """Request model for creating/updating UDFs."""
+    transformation_stage: str
+    udf_name: str
+    udf_number: int
+    udf_logic: str
+    dependencies: List[str] = []
+    execution_frequency: str = "daily"
 
-class StarSchemaRequest(BaseModel):
-    """Request model for star schema design."""
-    catalog_id: str
-    fact_tables: List[str]
-    dimension_tables: List[str]
-    relationships: List[Dict[str, Any]]
+class UDFExecutionRequest(BaseModel):
+    """Request model for executing UDFs."""
+    udf_name: str
+    dry_run: bool = False
 
-@model_router.post("/erd/generate")
-async def generate_erd(request: ERDRequest):
-    """
-    Generate Entity Relationship Diagram from catalog.
-    
-    This endpoint creates an ERD based on the discovered metadata
-    and allows for interactive editing.
-    """
+class TransformationStatus(BaseModel):
+    """Response model for transformation status."""
+    stage: str
+    udf_name: str
+    status: str
+    records_processed: int
+    execution_time: float
+    error_message: Optional[str] = None
+
+# API Endpoints
+
+@model_router.get("/status")
+async def get_model_status():
+    """Get overall model phase status."""
     try:
-        logger.log_api_call("/model/erd/generate", "POST")
+        db_manager = DatabaseManager()
         
-        # Initialize ERD generator
-        erd_generator = ERDGenerator()
+        # Get UDF count by stage
+        udf_count_query = """
+        SELECT 
+            transformation_stage,
+            COUNT(*) as udf_count
+        FROM metadata.transformation1
+        GROUP BY transformation_stage
+        ORDER BY transformation_stage
+        """
         
-        # Generate ERD
-        erd_result = erd_generator.generate_erd(
-            catalog_id=request.catalog_id,
-            include_relationships=request.include_relationships,
-            include_attributes=request.include_attributes
-        )
+        udf_counts = db_manager.execute_query(udf_count_query)
+        
+        # Get silver table count
+        silver_tables_query = "SHOW TABLES FROM silver"
+        silver_tables = db_manager.execute_query(silver_tables_query)
+        
+        return {
+            "status": "active",
+            "phase": "Model",
+            "description": "ELT transformation orchestration with ClickHouse UDFs",
+            "udf_counts_by_stage": {row["transformation_stage"]: row["udf_count"] for row in udf_counts} if udf_counts else {},
+            "silver_tables": [table["name"] for table in silver_tables] if silver_tables else [],
+            "total_udfs": sum(row["udf_count"] for row in udf_counts) if udf_counts else 0,
+            "total_silver_tables": len(silver_tables) if silver_tables else 0
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting model status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.get("/udfs")
+async def get_udfs(
+    stage: Optional[str] = Query(None, description="Filter by transformation stage"),
+    limit: int = Query(100, description="Maximum number of UDFs to return")
+):
+    """Get all UDFs or filter by stage."""
+    try:
+        db_manager = DatabaseManager()
+        
+        where_clause = ""
+        if stage:
+            where_clause = f"WHERE transformation_stage = '{stage}'"
+        
+        query = f"""
+        SELECT 
+            transformation_stage,
+            udf_name,
+            udf_number,
+            udf_logic,
+            dependencies,
+            execution_frequency,
+            created_at,
+            updated_at,
+            version
+        FROM metadata.transformation1
+        {where_clause}
+        ORDER BY transformation_stage, udf_number
+        LIMIT {limit}
+        """
+        
+        results = db_manager.execute_query(query)
         
         return {
             "status": "success",
-            "erd_id": erd_result["erd_id"],
-            "entities": erd_result["entities"],
-            "relationships": erd_result["relationships"],
-            "message": "ERD generated successfully"
+            "udfs": results if results else [],
+            "total_count": len(results) if results else 0,
+            "filtered_by_stage": stage
         }
         
     except Exception as e:
-        logger.error(f"Error generating ERD: {str(e)}")
+        logger.error(f"Error getting UDFs: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@model_router.post("/hierarchy/model")
-async def model_hierarchies(request: HierarchyRequest):
-    """
-    Model dimensional hierarchies from catalog.
-    
-    This endpoint discovers and models hierarchical relationships
-    following OLAP standards.
-    """
+@model_router.post("/udfs")
+async def create_udf(request: UDFRequest):
+    """Create a new UDF."""
     try:
-        logger.log_api_call("/model/hierarchy/model", "POST")
+        db_manager = DatabaseManager()
         
-        # Initialize hierarchy modeler
-        hierarchy_modeler = HierarchyModeler()
+        # Generate new version for upsert
+        new_version = int(datetime.now().timestamp() * 1000000)
         
-        # Model hierarchies
-        hierarchy_result = hierarchy_modeler.model_hierarchies(
-            catalog_id=request.catalog_id,
-            config=request.hierarchy_config
+        # Insert UDF metadata
+        insert_sql = f"""
+        INSERT INTO metadata.transformation1 (
+            transformation_stage,
+            udf_name,
+            udf_number,
+            udf_logic,
+            dependencies,
+            execution_frequency,
+            version
+        ) VALUES (
+            '{request.transformation_stage}',
+            '{request.udf_name}',
+            {request.udf_number},
+            '{request.udf_logic.replace("'", "''")}',
+            {request.dependencies},
+            '{request.execution_frequency}',
+            {new_version}
         )
+        """
+        
+        result = db_manager.execute_query(insert_sql)
         
         return {
             "status": "success",
-            "hierarchy_id": hierarchy_result["hierarchy_id"],
-            "hierarchies": hierarchy_result["hierarchies"],
-            "levels": hierarchy_result["levels"],
-            "message": "Hierarchies modeled successfully"
+            "message": f"UDF '{request.udf_name}' created successfully",
+            "udf_name": request.udf_name,
+            "transformation_stage": request.transformation_stage,
+            "version": new_version
         }
         
     except Exception as e:
-        logger.error(f"Error modeling hierarchies: {str(e)}")
+        logger.error(f"Error creating UDF: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@model_router.post("/star-schema/design")
-async def design_star_schema(request: StarSchemaRequest):
-    """
-    Design star schema for data warehouse.
-    
-    This endpoint creates a star schema design with fact and dimension tables
-    based on the discovered metadata and relationships.
-    """
+@model_router.post("/udfs/execute")
+async def execute_udf(request: UDFExecutionRequest):
+    """Execute a UDF."""
     try:
-        logger.log_api_call("/model/star-schema/design", "POST")
+        db_manager = DatabaseManager()
         
-        # Initialize star schema designer
-        star_designer = StarSchemaDesigner()
+        # Get UDF logic
+        udf_query = f"""
+        SELECT udf_logic, transformation_stage
+        FROM metadata.transformation1
+        WHERE udf_name = '{request.udf_name}'
+        ORDER BY version DESC
+        LIMIT 1
+        """
         
-        # Design star schema
-        star_result = star_designer.design_schema(
-            catalog_id=request.catalog_id,
-            fact_tables=request.fact_tables,
-            dimension_tables=request.dimension_tables,
-            relationships=request.relationships
-        )
+        udf_results = db_manager.execute_query(udf_query)
+        if not udf_results:
+            raise HTTPException(status_code=404, detail=f"UDF '{request.udf_name}' not found")
+        
+        udf_logic = udf_results[0]["udf_logic"]
+        stage = udf_results[0]["transformation_stage"]
+        
+        if request.dry_run:
+            return {
+                "status": "dry_run",
+                "message": f"Dry run for UDF '{request.udf_name}'",
+                "udf_logic": udf_logic,
+                "transformation_stage": stage
+            }
+        
+        # Execute UDF
+        start_time = datetime.now()
+        result = db_manager.execute_query(udf_logic)
+        execution_time = (datetime.now() - start_time).total_seconds()
         
         return {
             "status": "success",
-            "schema_id": star_result["schema_id"],
-            "fact_tables": star_result["fact_tables"],
-            "dimension_tables": star_result["dimension_tables"],
-            "relationships": star_result["relationships"],
-            "message": "Star schema designed successfully"
+            "message": f"UDF '{request.udf_name}' executed successfully",
+            "udf_name": request.udf_name,
+            "transformation_stage": stage,
+            "execution_time": execution_time,
+            "result": result
         }
         
     except Exception as e:
-        logger.error(f"Error designing star schema: {str(e)}")
+        logger.error(f"Error executing UDF: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@model_router.post("/transform/silver")
-async def transform_to_silver(catalog_id: str, erd_id: str):
-    """
-    Transform bronze schema to silver layer (3NF).
-    
-    This endpoint generates the transformation logic to convert
-    bronze layer data into normalized silver layer.
-    """
+@model_router.post("/transformations/stage1")
+async def execute_stage1_transformations():
+    """Execute all Stage 1 transformations (Bronze to Silver)."""
     try:
-        logger.log_api_call("/model/transform/silver", "POST")
+        db_manager = DatabaseManager()
         
-        # Initialize schema transformer
-        transformer = SchemaTransformer()
+        # Get all Stage 1 UDFs
+        stage1_query = """
+        SELECT udf_name, udf_logic
+        FROM metadata.transformation1
+        WHERE transformation_stage = 'stage1'
+        ORDER BY udf_number
+        """
         
-        # Transform to silver
-        silver_result = transformer.transform_to_silver(
-            catalog_id=catalog_id,
-            erd_id=erd_id
-        )
+        udfs = db_manager.execute_query(stage1_query)
+        if not udfs:
+            return {
+                "status": "success",
+                "message": "No Stage 1 UDFs found",
+                "transformations_executed": 0
+            }
+        
+        results = []
+        total_records = 0
+        
+        for udf in udfs:
+            udf_name = udf["udf_name"]
+            udf_logic = udf["udf_logic"]
+            
+            try:
+                start_time = datetime.now()
+                result = db_manager.execute_query(udf_logic)
+                execution_time = (datetime.now() - start_time).total_seconds()
+                
+                # Try to get record count from result
+                records_processed = 0
+                if result and isinstance(result, list) and len(result) > 0:
+                    if isinstance(result[0], dict) and "written_rows" in result[0]:
+                        records_processed = result[0]["written_rows"]
+                
+                results.append({
+                    "udf_name": udf_name,
+                    "status": "success",
+                    "records_processed": records_processed,
+                    "execution_time": execution_time
+                })
+                
+                total_records += records_processed
+                
+            except Exception as e:
+                results.append({
+                    "udf_name": udf_name,
+                    "status": "error",
+                    "error_message": str(e),
+                    "records_processed": 0,
+                    "execution_time": 0
+                })
         
         return {
             "status": "success",
-            "transformation_id": silver_result["transformation_id"],
-            "sql_scripts": silver_result["sql_scripts"],
-            "tables": silver_result["tables"],
-            "message": "Silver layer transformation generated successfully"
+            "message": f"Stage 1 transformations completed",
+            "transformations_executed": len(results),
+            "total_records_processed": total_records,
+            "results": results
         }
         
     except Exception as e:
-        logger.error(f"Error transforming to silver: {str(e)}")
+        logger.error(f"Error executing Stage 1 transformations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@model_router.post("/transform/gold")
-async def transform_to_gold(schema_id: str, hierarchy_id: str):
-    """
-    Transform silver schema to gold layer (star schema).
-    
-    This endpoint generates the transformation logic to convert
-    silver layer data into star schema gold layer.
-    """
+@model_router.get("/silver/tables")
+async def get_silver_tables():
+    """Get all silver layer tables with their structure."""
     try:
-        logger.log_api_call("/model/transform/gold", "POST")
+        db_manager = DatabaseManager()
         
-        # Initialize schema transformer
-        transformer = SchemaTransformer()
+        # Get all silver tables
+        tables_query = "SHOW TABLES FROM silver"
+        tables = db_manager.execute_query(tables_query)
         
-        # Transform to gold
-        gold_result = transformer.transform_to_gold(
-            schema_id=schema_id,
-            hierarchy_id=hierarchy_id
-        )
+        if not tables:
+            return {
+                "status": "success",
+                "silver_tables": [],
+                "total_count": 0
+            }
+        
+        # Get structure for each table
+        table_details = []
+        for table in tables:
+            table_name = table["name"]
+            
+            # Get table structure
+            desc_query = f"DESCRIBE silver.{table_name}"
+            columns = db_manager.execute_query(desc_query)
+            
+            # Get record count
+            count_query = f"SELECT COUNT(*) as count FROM silver.{table_name}"
+            count_result = db_manager.execute_query(count_query)
+            record_count = count_result[0]["count"] if count_result else 0
+            
+            table_details.append({
+                "table_name": table_name,
+                "columns": columns if columns else [],
+                "record_count": record_count
+            })
         
         return {
             "status": "success",
-            "transformation_id": gold_result["transformation_id"],
-            "sql_scripts": gold_result["sql_scripts"],
-            "fact_tables": gold_result["fact_tables"],
-            "dimension_tables": gold_result["dimension_tables"],
-            "message": "Gold layer transformation generated successfully"
+            "silver_tables": table_details,
+            "total_count": len(table_details)
         }
         
     except Exception as e:
-        logger.error(f"Error transforming to gold: {str(e)}")
+        logger.error(f"Error getting silver tables: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@model_router.get("/models")
-async def list_models():
-    """
-    List all available models.
-    """
+@model_router.get("/silver/tables/{table_name}/sample")
+async def get_silver_table_sample(
+    table_name: str,
+    limit: int = Query(10, description="Number of sample records to return")
+):
+    """Get sample data from a silver table."""
     try:
-        logger.log_api_call("/model/models", "GET")
+        db_manager = DatabaseManager()
         
-        # Return available model types
-        models = {
-            "erd": "Entity Relationship Diagrams",
-            "hierarchy": "Dimensional Hierarchies", 
-            "star_schema": "Star Schema Designs",
-            "silver": "Silver Layer (3NF) Models",
-            "gold": "Gold Layer (Star Schema) Models"
+        # Get sample data
+        sample_query = f"""
+        SELECT *
+        FROM silver.{table_name}
+        LIMIT {limit}
+        """
+        
+        results = db_manager.execute_query(sample_query)
+        
+        return {
+            "status": "success",
+            "table_name": table_name,
+            "sample_data": results if results else [],
+            "sample_size": len(results) if results else 0,
+            "requested_limit": limit
         }
         
-        return {"models": models}
-        
     except Exception as e:
-        logger.error(f"Error listing models: {str(e)}")
+        logger.error(f"Error getting sample data from {table_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

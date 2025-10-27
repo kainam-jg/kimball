@@ -38,11 +38,14 @@ KIMBALL follows a four-phase approach:
 - **Relationship discovery** and join candidate identification
 - **Primary key detection** and foreign key mapping
 
-### 3. **Model Phase** 🏗️
-- **Interactive ERD generation** and editing
-- **Hierarchical relationship modeling** (OLAP-style)
-- **Star schema design** for data warehouse optimization
-- **Silver layer (3NF)** and **Gold layer (star schema)** modeling
+### 3. **Model Phase** 🏗️ **IN PROGRESS**
+- **ELT Architecture**: Extract, Load, Transform using ClickHouse UDFs
+- **Transformation Orchestration**: Automated UDF execution with dependency management
+- **Delta Lake Framework**: Standardized change data capture and versioning
+- **Metadata-Driven Transformations**: UDF logic stored in `metadata.transformation1` table
+- **Multi-Stage Processing**: Bronze → Silver → Gold with stage-specific transformations
+- **Rollback Capabilities**: Transaction-safe transformations with rollback support
+- **Monitoring & Logging**: Comprehensive transformation monitoring and audit trails
 
 ### 4. **Build Phase** 🚀
 - **Automated DAG generation** for production pipelines
@@ -152,6 +155,78 @@ PUT /api/v1/discover/metadata/edit
 }
 # Result: ALL columns get new_table_name = "product_catalog"
 #         AND vehicle_class gets new_column_name = "product_category"
+```
+
+## 🔄 ELT Transformation Architecture
+
+KIMBALL implements a sophisticated **ELT (Extract, Load, Transform) architecture** using ClickHouse User-Defined Functions (UDFs) for data transformation orchestration.
+
+### **Architecture Overview:**
+
+#### **Multi-Stage Processing Pipeline:**
+```
+Bronze Layer (Raw Data) → Silver Layer (Cleaned/Transformed) → Gold Layer (Business-Ready)
+     ↓                           ↓                              ↓
+  Stage 1                    Stage 2                        Stage 3
+(Data Type & Name)        (Change Data Capture)         (Business Logic)
+```
+
+#### **Key Components:**
+
+1. **Metadata-Driven Transformations**
+   - UDF logic stored in `metadata.transformation1` table
+   - Transformation dependencies and execution order
+   - Rollback capabilities and version control
+
+2. **ClickHouse UDFs**
+   - SQL-based transformation functions
+   - Parameterized and reusable logic
+   - Performance-optimized for large datasets
+
+3. **Orchestration Engine**
+   - Automated UDF execution scheduling
+   - Dependency management and parallel execution
+   - Monitoring and logging infrastructure
+
+4. **Delta Lake Framework**
+   - Standardized change data capture
+   - Version control and time travel capabilities
+   - ACID transactions and rollback support
+
+### **Transformation Stages:**
+
+#### **Stage 1: Data Type & Name Transformation**
+- Convert string data types to proper types (date, numeric, etc.)
+- Apply custom table and column names from metadata
+- Create Silver layer tables with `stage1` suffix
+- Data quality validation and cleansing
+
+#### **Stage 2: Change Data Capture (CDC)**
+- Implement delta processing for incremental updates
+- Track changes and maintain data lineage
+- Optimize for performance with incremental loads
+
+#### **Stage 3: Business Logic & Aggregation**
+- Apply business rules and calculations
+- Create aggregated tables and materialized views
+- Generate final Gold layer for analytics
+
+### **Metadata Schema:**
+
+```sql
+-- Transformation metadata table
+CREATE TABLE metadata.transformation1 (
+    transformation_stage String,      -- stage1, stage2, stage3, etc.
+    udf_name String,                   -- Name of the UDF function
+    udf_number UInt32,                 -- Execution order number
+    udf_logic String,                  -- SQL transformation logic
+    dependencies Array(String),        -- Dependent UDFs
+    execution_frequency String,        -- How often to run (daily, hourly, etc.)
+    created_at DateTime DEFAULT now(),
+    updated_at DateTime DEFAULT now(),
+    version UInt64 DEFAULT 1
+) ENGINE = ReplacingMergeTree(version)
+ORDER BY (transformation_stage, udf_number)
 ```
 
 ## 🔄 Stream-Based Data Processing Architecture
