@@ -584,6 +584,95 @@ async def execute_stage1_transformations():
         logger.error(f"Error executing Stage 1 transformations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@transformation_router.post("/transformations/stage2")
+async def execute_stage2_transformations():
+    """
+    Execute all Stage 2 transformations (Silver Stage1 to Silver Stage2 CDC).
+    
+    This endpoint executes all UDFs in the 'stage2' transformation stage.
+    It implements CDC (Change Data Capture) logic using create_date for change detection.
+    
+    CDC Process:
+    1. Creates Stage 2 tables with ReplacingMergeTree engine
+    2. Inserts/updates records from Stage 1 to Stage 2
+    3. Uses create_date as version for deduplication
+    4. Optimizes tables to merge duplicates
+    
+    Returns:
+        - Execution results for each UDF
+        - Total records processed
+        - Execution times and error information
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # Get all Stage 2 UDFs
+        stage2_query = """
+        SELECT udf_name, udf_logic, udf_schema_name
+        FROM metadata.transformation1
+        WHERE transformation_stage = 'stage2'
+        ORDER BY udf_number
+        """
+        
+        udfs = db_manager.execute_query(stage2_query)
+        if not udfs:
+            return {
+                "status": "success",
+                "message": "No Stage 2 UDFs found",
+                "transformations_executed": 0
+            }
+        
+        results = []
+        total_records = 0
+        
+        for udf in udfs:
+            udf_name = udf["udf_name"]
+            udf_logic = udf["udf_logic"]
+            schema_name = udf["udf_schema_name"]
+            
+            try:
+                start_time = datetime.now()
+                result = db_manager.execute_query(udf_logic)
+                execution_time = (datetime.now() - start_time).total_seconds()
+                
+                # Try to get record count from result
+                records_processed = 0
+                if result and isinstance(result, list) and len(result) > 0:
+                    if isinstance(result[0], dict) and "written_rows" in result[0]:
+                        records_processed = result[0]["written_rows"]
+                
+                results.append({
+                    "udf_name": udf_name,
+                    "schema_name": schema_name,
+                    "status": "success",
+                    "records_processed": records_processed,
+                    "execution_time": execution_time
+                })
+                
+                total_records += records_processed
+                
+            except Exception as e:
+                results.append({
+                    "udf_name": udf_name,
+                    "schema_name": schema_name,
+                    "status": "error",
+                    "error_message": str(e),
+                    "records_processed": 0,
+                    "execution_time": 0
+                })
+        
+        return {
+            "status": "success",
+            "message": f"Stage 2 CDC transformations completed",
+            "transformations_executed": len(results),
+            "total_records_processed": total_records,
+            "results": results
+        }
+        
+    except Exception as e:
+        logger.error(f"Error executing Stage 2 transformations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @transformation_router.get("/schemas")
 async def get_udf_schemas():
     """Get all UDF schemas and their UDF counts."""

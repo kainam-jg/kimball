@@ -47,6 +47,90 @@ KIMBALL follows a four-phase approach:
 - **Rollback Capabilities**: Transaction-safe transformations with rollback support
 - **Monitoring & Logging**: Comprehensive transformation monitoring and audit trails
 
+#### **🔄 ELT Transformation Architecture**
+
+The Transformation Phase implements a sophisticated ELT (Extract, Load, Transform) architecture using ClickHouse UDFs for data processing:
+
+##### **Multi-Stage Processing Pipeline**
+- **Bronze Layer**: Raw data from various sources (S3, PostgreSQL, APIs)
+- **Silver Layer**: Cleaned and typed data with business logic applied
+- **Gold Layer**: Aggregated and optimized data for analytics
+
+##### **Key Components**
+- **UDF Management**: User-Defined Functions stored in `metadata.transformation1`
+- **Schema Organization**: UDFs organized by schema (`udf_schema_name`)
+- **Dependency Management**: UDF execution order and dependencies
+- **Version Control**: Microsecond-precision versioning for upserts
+- **Execution Frequency**: Configurable execution schedules
+
+##### **Transformation Stages**
+
+###### **Stage 1: Data Type Conversion (Bronze → Silver)**
+- **Purpose**: Convert string data to proper data types based on intelligent inference
+- **Process**: 
+  1. Truncate existing silver tables
+  2. Load data from bronze with type conversions
+  3. Apply custom column and table names from metadata
+- **Tables**: `*_stage1` suffix (e.g., `sales_transactions_stage1`)
+
+###### **Stage 2: Change Data Capture (CDC) (Silver Stage1 → Silver Stage2)**
+- **Purpose**: Implement CDC using delta lake concepts for current data maintenance
+- **Process**:
+  1. Create Stage 2 tables with `ReplacingMergeTree` engine
+  2. Use `create_date` as version for deduplication
+  3. Insert/update records from Stage 1 to Stage 2
+  4. Optimize tables to merge duplicates
+- **Tables**: No suffix (e.g., `sales_transactions`) - these are the "current" tables
+- **CDC Logic**: Uses `create_date` field to identify new/changed records
+
+###### **Stage 3+: Business Logic and Aggregation (Silver → Gold)**
+- **Purpose**: Apply business rules and create analytical datasets
+- **Process**: TBD (future implementation)
+
+##### **CDC (Change Data Capture) Architecture**
+
+The Stage 2 CDC implementation follows delta lake principles:
+
+```sql
+-- Stage 2 Table Creation (ReplacingMergeTree for CDC)
+CREATE TABLE IF NOT EXISTS silver.sales_transactions AS silver.sales_transactions_stage1
+ENGINE = ReplacingMergeTree(create_date)
+ORDER BY create_date;
+
+-- CDC Logic: Insert/Update from Stage 1 to Stage 2
+INSERT INTO silver.sales_transactions
+SELECT *
+FROM silver.sales_transactions_stage1
+WHERE create_date >= toDate(now()) - INTERVAL 1 DAY;
+
+-- Optimize table to merge duplicates
+OPTIMIZE TABLE silver.sales_transactions FINAL;
+```
+
+**CDC Benefits**:
+- **Current Data**: Stage 2 tables always contain the most current data
+- **Change Tracking**: Uses `create_date` to identify new/changed records
+- **Deduplication**: `ReplacingMergeTree` automatically handles duplicates
+- **Performance**: Optimized for both inserts and queries
+- **Scalability**: Handles large datasets efficiently
+
+##### **Metadata Schema**
+```sql
+CREATE TABLE metadata.transformation1 (
+    transformation_stage String,
+    udf_name String,
+    udf_number Int32,
+    udf_logic String,
+    udf_schema_name String,
+    dependencies Array(String),
+    execution_frequency String,
+    created_at DateTime,
+    updated_at DateTime,
+    version UInt64
+) ENGINE = ReplacingMergeTree(version)
+ORDER BY (transformation_stage, udf_name)
+```
+
 ### 4. **Model Phase** 🏗️
 - **Interactive ERD generation** and editing
 - **Hierarchical relationship modeling** (OLAP-style)
@@ -508,6 +592,7 @@ Once the FastAPI backend is running, visit:
 - `POST /api/v1/transformation/udfs/create` - Create UDF function in ClickHouse
 - `POST /api/v1/transformation/udfs/execute` - Execute UDF
 - `POST /api/v1/transformation/transformations/stage1` - Execute all Stage 1 transformations
+- `POST /api/v1/transformation/transformations/stage2` - Execute all Stage 2 CDC transformations
 - `GET /api/v1/transformation/schemas` - Get all UDF schemas
 
 #### Model Phase (Coming Soon)

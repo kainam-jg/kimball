@@ -399,6 +399,11 @@ curl -X POST "http://localhost:8000/api/v1/transformation/udfs/execute" \
 curl -X POST "http://localhost:8000/api/v1/transformation/transformations/stage1"
 ```
 
+#### **Execute All Stage 2 CDC Transformations**
+```bash
+curl -X POST "http://localhost:8000/api/v1/transformation/transformations/stage2"
+```
+
 ---
 
 ## 🏗️ **Model Phase** (Coming Soon)
