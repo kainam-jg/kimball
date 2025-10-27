@@ -125,24 +125,22 @@ curl -X POST "http://localhost:8000/api/v1/acquire/explore/sql" \
 
 ### **Data Extraction**
 
-#### **Extract Storage Data to Bronze**
+#### **Extract Storage Data to Bronze** ✅ **WORKING**
 ```bash
-# Single file extraction
-curl -X POST "http://localhost:8000/api/v1/acquire/extract-data" \
+# Single file extraction (creates table a priori with header columns)
+curl -X POST "http://localhost:8000/api/v1/acquire/extract/storage/AWS%20S3%20Bucket" \
   -H "Content-Type: application/json" \
   -d '{
-    "source_name": "AWS S3 Bucket",
     "extraction_config": {
-      "dealer_regions.csv": ["vehicle_sales_data/dealer_regions.csv"]
+      "dealer_sales.csv": ["vehicle_sales_data/dealer_sales.csv"]
     },
-    "target_table": "dealer_regions"
+    "target_table": "dealer_sales"
   }'
 
 # Multiple files extraction
-curl -X POST "http://localhost:8000/api/v1/acquire/extract-data" \
+curl -X POST "http://localhost:8000/api/v1/acquire/extract/storage/AWS%20S3%20Bucket" \
   -H "Content-Type: application/json" \
   -d '{
-    "source_name": "AWS S3 Bucket",
     "extraction_config": {
       "dealer_regions.csv": ["vehicle_sales_data/dealer_regions.csv"],
       "vehicles.csv": ["vehicle_sales_data/vehicles.csv"],
@@ -151,30 +149,33 @@ curl -X POST "http://localhost:8000/api/v1/acquire/extract-data" \
   }'
 ```
 
-#### **Extract Database Data to Bronze**
+#### **Extract Database Data to Bronze** ✅ **WORKING**
 ```bash
-# Extract entire table
-curl -X POST "http://localhost:8000/api/v1/acquire/extract-data" \
+# Extract entire table (with 200K chunking + 1000 batch loading)
+curl -X POST "http://localhost:8000/api/v1/acquire/extract/database/Vehicle%20Sales%20Data" \
   -H "Content-Type: application/json" \
   -d '{
-    "source_name": "PostgreSQL Database",
     "extraction_config": {
       "daily_sales": ["vehicles.daily_sales"]
     },
     "target_table": "daily_sales"
   }'
 
-# Extract with custom SQL
-curl -X POST "http://localhost:8000/api/v1/acquire/extract-data" \
+# Extract with custom SQL (creates table a priori with query columns)
+curl -X POST "http://localhost:8000/api/v1/acquire/extract/sql/Vehicle%20Sales%20Data" \
   -H "Content-Type: application/json" \
   -d '{
-    "source_name": "PostgreSQL Database",
-    "extraction_config": {
-      "custom_sales": ["SELECT * FROM vehicles.daily_sales WHERE amount_sales > 1000"]
-    },
+    "query": "SELECT * FROM vehicles.daily_sales WHERE amount_sales > 1000",
     "target_table": "high_value_sales"
   }'
 ```
+
+**Key Features:**
+- **Storage Extraction**: Creates ClickHouse table a priori using file header columns
+- **Database Extraction**: Uses efficient 200K chunking from PostgreSQL + 1000 batch loading to ClickHouse
+- **SQL Extraction**: Creates table a priori using query result columns
+- **Enhanced Logging**: Detailed progress tracking for chunks and batches
+- **String Streams**: All data converted to strings for consistent processing
 
 ---
 
@@ -187,19 +188,56 @@ curl -X POST "http://localhost:8000/api/v1/acquire/extract-data" \
 curl -X GET "http://localhost:8000/api/v1/discover/status"
 ```
 
-#### **Test Discovery System**
-```bash
-curl -X GET "http://localhost:8000/api/v1/discover/test"
-```
+**Expected Result**: Returns discovery phase status and metadata table information
 
-#### **Analyze Single Table**
+#### **Analyze Bronze Schema**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/discover/analyze/table" \
+curl -X POST "http://localhost:8000/api/v1/discover/analyze" \
   -H "Content-Type: application/json" \
   -d '{
-    "table_name": "daily_sales"
+    "schema_name": "bronze",
+    "include_sample_data": true,
+    "sample_size": 1000
   }'
 ```
+
+**Expected Result**: 
+- Analyzes all tables in bronze schema
+- Creates metadata.discover table
+- Returns analysis results with inferred types and classifications
+- Example: `amount_sales` classified as `fact` (numeric), `sales_date` as `date`
+
+#### **Get Discovery Metadata**
+```bash
+# Get all metadata
+curl -X GET "http://localhost:8000/api/v1/discover/metadata"
+
+# Get metadata for specific table
+curl -X GET "http://localhost:8000/api/v1/discover/metadata?table_name=daily_sales"
+```
+
+**Expected Result**: Returns detailed metadata including:
+- Original and new table/column names
+- Inferred data types (date, numeric, string)
+- Classifications (fact vs dimension)
+- Cardinality and data quality scores
+- Sample values
+
+#### **Edit Discovery Metadata**
+```bash
+curl -X PUT "http://localhost:8000/api/v1/discover/metadata" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "original_table_name": "daily_sales",
+    "original_column_name": "amount_sales",
+    "new_table_name": "sales_transactions",
+    "new_column_name": "sales_amount",
+    "inferred_type": "decimal",
+    "classification": "fact"
+  }'
+```
+
+**Expected Result**: Updates metadata for the specified column
 
 #### **Analyze Entire Schema**
 ```bash
@@ -846,6 +884,30 @@ curl -X POST "http://localhost:8000/api/v1/transform/udfs/execute" \
 5. **Test Error Cases**: Include invalid inputs to test error handling
 6. **Use Filters**: Leverage query parameters to filter and limit results
 7. **Test Workflows**: Follow the complete pipeline workflow for end-to-end testing
+
+---
+
+## 🔧 **Recent Improvements (October 2025)**
+
+### **Acquire Phase Enhancements**
+- ✅ **Fixed Chunking Logic**: Restored efficient 200K chunking for database extractions
+- ✅ **A Priori Table Creation**: All extraction types now create ClickHouse tables before loading data
+- ✅ **Enhanced Logging**: Detailed progress tracking for chunks and batches
+- ✅ **Code Cleanup**: Removed unused functions and optimized performance
+- ✅ **String Streams**: Standardized data handling with string conversion
+- ✅ **Batch Optimization**: 1000-record batches for optimal ClickHouse insertion
+
+### **Performance Improvements**
+- **Database Extraction**: 200K chunks from PostgreSQL → 1000 batches to ClickHouse
+- **Storage Extraction**: Header-based column detection and table creation
+- **SQL Extraction**: Query result column detection and table creation
+- **Memory Management**: Streaming processing prevents memory accumulation
+
+### **Bug Fixes**
+- Fixed `postgresql` vs `postgres` source type validation
+- Fixed indentation errors in acquire_routes.py
+- Fixed column name mismatches in ClickHouse table creation
+- Fixed hanging issues during large dataset processing
 
 ---
 

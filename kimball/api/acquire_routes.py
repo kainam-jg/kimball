@@ -584,9 +584,9 @@ async def extract_from_storage_source(source_id: str, request: StorageExtraction
         if source_type == "s3":
             results = await _extract_multiple_from_s3(source_config, request)
         elif source_type == "azure":
-            results = await _extract_multiple_from_azure(source_config, request)
+            raise HTTPException(status_code=501, detail="Azure Blob Storage extraction not yet implemented")
         elif source_type == "gcp":
-            results = await _extract_multiple_from_gcp(source_config, request)
+            raise HTTPException(status_code=501, detail="GCP Storage extraction not yet implemented")
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported storage type: {source_type}")
         
@@ -603,77 +603,6 @@ async def extract_from_storage_source(source_id: str, request: StorageExtraction
     except Exception as e:
         logger.error(f"Error extracting from storage source {source_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-async def _extract_from_s3(source_config: Dict[str, Any], request: StorageExtractionRequest) -> Dict[str, Any]:
-    """Extract data from S3 and load it into ClickHouse bronze layer."""
-    try:
-        import boto3
-        import io
-        import csv
-        from datetime import datetime
-        
-        # Create S3 client
-        s3_client = boto3.client(
-            's3',
-            aws_access_key_id=source_config.get("access_key"),
-            aws_secret_access_key=source_config.get("secret_key"),
-            region_name=source_config.get("region", "us-east-1")
-        )
-        
-        bucket_name = source_config.get("bucket")
-        if not bucket_name:
-            raise HTTPException(status_code=400, detail="S3 bucket name not configured")
-        
-        # Generate target table name if not provided
-        if not request.target_table:
-            # Extract filename from object key
-            filename = request.object_key.split('/')[-1]
-            # Remove extension
-            table_name = filename.split('.')[0]
-            # Add timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            target_table = f"{table_name}_{timestamp}"
-        else:
-            target_table = request.target_table
-        
-        # Download the file from S3
-        logger.info(f"Downloading file from S3: {bucket_name}/{request.object_key}")
-        response = s3_client.get_object(Bucket=bucket_name, Key=request.object_key)
-        file_content = response['Body'].read()
-        
-        # Detect file type from extension
-        file_extension = request.object_key.split('.')[-1].lower()
-        
-        if file_extension == 'csv':
-            data = await _parse_csv_data(file_content)
-        elif file_extension in ['xlsx', 'xls']:
-            data = await _parse_excel_data(file_content)
-        elif file_extension == 'parquet':
-            data = await _parse_parquet_data(file_content)
-        else:
-            raise HTTPException(status_code=400, detail=f"Unsupported file type: {file_extension}")
-        
-        if not data:
-            raise HTTPException(status_code=400, detail="No data found in file")
-        
-        # Load data into ClickHouse
-        records_loaded = await _load_data_to_clickhouse(data, target_table)
-        
-        return {
-            "status": "success",
-            "source_type": "s3",
-            "bucket": bucket_name,
-            "object_key": request.object_key,
-            "file_type": file_extension,
-            "target_table": target_table,
-            "records_extracted": len(data),
-            "records_loaded": records_loaded,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"Error extracting from S3: {e}")
-        raise HTTPException(status_code=500, detail=f"S3 extraction failed: {str(e)}")
 
 async def _extract_multiple_from_s3(source_config: Dict[str, Any], request: StorageExtractionRequest) -> List[Dict[str, Any]]:
     """Extract multiple files from S3 in parallel and load them into ClickHouse bronze layer."""
@@ -740,16 +669,16 @@ async def _process_single_s3_file(s3_client, bucket_name: str, object_key: str, 
     """Process a single S3 file and load it into ClickHouse."""
     try:
         from datetime import datetime
-        
+
         # Download the file from S3
         logger.info(f"Downloading file from S3: {bucket_name}/{object_key}")
         response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
         file_content = response['Body'].read()
-        
+
         # Detect file type from extension
         file_extension = object_key.split('.')[-1].lower()
         logger.info(f"Processing file: {object_key}, detected type: {file_extension}")
-        
+
         if file_extension == 'csv':
             data = await _parse_csv_data(file_content)
         elif file_extension in ['xlsx', 'xls']:
@@ -758,14 +687,41 @@ async def _process_single_s3_file(s3_client, bucket_name: str, object_key: str, 
             data = await _parse_parquet_data(file_content)
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported file type: {file_extension}")
-        
+
         if not data:
             raise HTTPException(status_code=400, detail="No data found in file")
-        
+
         logger.info(f"Successfully parsed {len(data)} records from {object_key}")
+
+        # Get column names from first row (header)
+        column_names = list(data[0].keys())
+        logger.info(f"File columns: {column_names}")
+
+        # Initialize ClickHouse table BEFORE loading data
+        from ..core.database import DatabaseManager
+        db_manager = DatabaseManager()
         
+        # Drop existing table if it exists
+        drop_table_sql = f"DROP TABLE IF EXISTS bronze.{target_table}"
+        db_manager.execute_query(drop_table_sql)
+        logger.info(f"Dropped existing table bronze.{target_table}")
+        
+        # Create table with proper column names from file header
+        create_table_sql = f"""
+        CREATE TABLE bronze.{target_table} (
+            {', '.join([f'`{col}` String' for col in column_names])},
+            `create_date` String
+        ) ENGINE = MergeTree()
+        ORDER BY create_date
+        """
+        
+        db_manager.execute_query(create_table_sql)
+        logger.info(f"Created table bronze.{target_table} with columns: {column_names}")
+
         # Load data into ClickHouse
-        records_loaded = await _load_data_to_clickhouse(data, target_table)
+        logger.info(f"Starting to load {len(data)} records to ClickHouse")
+        records_loaded = await _load_data_to_clickhouse(data, target_table, column_names)
+        logger.info(f"Completed loading: {records_loaded} records loaded to ClickHouse")
         
         return {
             "object_key": object_key,
@@ -780,15 +736,7 @@ async def _process_single_s3_file(s3_client, bucket_name: str, object_key: str, 
         logger.error(f"Error processing S3 file {object_key}: {e}")
         raise
 
-async def _extract_multiple_from_azure(source_config: Dict[str, Any], request: StorageExtractionRequest) -> List[Dict[str, Any]]:
-    """Extract multiple files from Azure Blob Storage in parallel."""
-    # TODO: Implement parallel Azure Blob Storage extraction
-    raise HTTPException(status_code=501, detail="Parallel Azure Blob Storage extraction not yet implemented")
 
-async def _extract_multiple_from_gcp(source_config: Dict[str, Any], request: StorageExtractionRequest) -> List[Dict[str, Any]]:
-    """Extract multiple files from GCP Storage in parallel."""
-    # TODO: Implement parallel GCP Storage extraction
-    raise HTTPException(status_code=501, detail="Parallel GCP Storage extraction not yet implemented")
 
 def _clean_text_content(text: str) -> str:
     """Clean text content by removing/replacing problematic characters."""
@@ -1093,15 +1041,6 @@ async def _load_data_to_clickhouse(data: List[Dict[str, Any]], target_table: str
         logger.error(f"Error loading data to ClickHouse: {e}")
         raise
 
-async def _extract_from_azure(source_config: Dict[str, Any], request: StorageExtractionRequest) -> Dict[str, Any]:
-    """Extract data from Azure Blob Storage."""
-    # TODO: Implement Azure Blob Storage extraction
-    raise HTTPException(status_code=501, detail="Azure Blob Storage extraction not yet implemented")
-
-async def _extract_from_gcp(source_config: Dict[str, Any], request: StorageExtractionRequest) -> Dict[str, Any]:
-    """Extract data from Google Cloud Storage."""
-    # TODO: Implement GCP Storage extraction
-    raise HTTPException(status_code=501, detail="GCP Storage extraction not yet implemented")
 
 async def _extract_multiple_from_database(source_config: Dict[str, Any], request: DatabaseTableExtractionRequest) -> List[Dict[str, Any]]:
     """Extract multiple tables from database in parallel and load them into ClickHouse bronze layer."""
@@ -1209,65 +1148,7 @@ async def _extract_multiple_from_database_sql(source_config: Dict[str, Any], req
         logger.error(f"Error in parallel SQL extraction: {e}")
         raise HTTPException(status_code=500, detail=f"Parallel SQL extraction failed: {str(e)}")
 
-async def _process_single_database_table(db_connector, table_name: str, target_table: str) -> Dict[str, Any]:
-    """Process a single database table and load it into ClickHouse."""
-    try:
-        # Extract data from database table
-        logger.info(f"Extracting data from database table: {table_name}")
-        data = db_connector.extract_table(table_name)
-        
-        if not data:
-            raise HTTPException(status_code=400, detail=f"No data found in table {table_name}")
 
-        logger.info(f"Successfully extracted {len(data)} records from {table_name}")
-
-        # Convert database results to string streams (common framework)
-        string_data = _convert_database_results_to_strings(data)
-
-        # Load data into ClickHouse using common framework
-        records_loaded = await _load_data_to_clickhouse(string_data, target_table)
-
-        return {
-            "table_name": table_name,
-            "target_table": target_table,
-            "records_extracted": len(data),
-            "records_loaded": records_loaded,
-            "status": "success"
-        }
-
-    except Exception as e:
-        logger.error(f"Error processing database table {table_name}: {e}")
-        raise
-
-async def _process_single_database_sql(db_connector, sql_query: str, target_table: str) -> Dict[str, Any]:
-    """Process a single SQL query and load results into ClickHouse."""
-    try:
-        # Execute SQL query
-        logger.info(f"Executing SQL query: {sql_query[:100]}...")
-        data = db_connector.execute_query(sql_query)
-        
-        if not data:
-            raise HTTPException(status_code=400, detail="No data returned from SQL query")
-
-        logger.info(f"Successfully executed SQL query, returned {len(data)} records")
-
-        # Convert database results to string streams (common framework)
-        string_data = _convert_database_results_to_strings(data)
-
-        # Load data into ClickHouse using common framework
-        records_loaded = await _load_data_to_clickhouse(string_data, target_table)
-
-        return {
-            "sql_query": sql_query[:100] + "..." if len(sql_query) > 100 else sql_query,
-            "target_table": target_table,
-            "records_extracted": len(data),
-            "records_loaded": records_loaded,
-            "status": "success"
-        }
-
-    except Exception as e:
-        logger.error(f"Error processing SQL query: {e}")
-        raise
 
 def _convert_database_results_to_strings(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Convert database results to string streams using common framework."""
@@ -1414,7 +1295,7 @@ async def extract_from_database_source(source_id: str, request: DatabaseTableExt
         source_type = source_config.get("type")
 
         # Validate that this is a database source
-        if source_type != "postgres":
+        if source_type not in ["postgres", "postgresql"]:
             raise HTTPException(status_code=400, detail=f"Source '{source_id}' is not a database source. Type: {source_type}")
 
         # Validate input
@@ -1459,7 +1340,7 @@ async def extract_from_database_sql(source_id: str, request: DatabaseSQLExtracti
         source_type = source_config.get("type")
 
         # Validate that this is a database source
-        if source_type != "postgres":
+        if source_type not in ["postgres", "postgresql"]:
             raise HTTPException(status_code=400, detail=f"Source '{source_id}' is not a database source. Type: {source_type}")
 
         # Validate input
@@ -1664,33 +1545,84 @@ async def _process_single_database_table_chunked(connector, table_name: str, tar
         else:
             chunk_size = 50000  # Still larger than before
         
-        # Process in chunks
-        all_data = []
+        # Get column schema from first chunk to create table
+        logger.info(f"Getting column schema from first chunk")
+        first_chunk_query = f"SELECT * FROM {table_name} LIMIT 1"
+        first_chunk_data = connector.execute_query(first_chunk_query)
+        
+        if not first_chunk_data:
+            raise HTTPException(status_code=400, detail=f"No data found in table {table_name}")
+        
+        # Get column names from first row
+        column_names = list(first_chunk_data[0].keys())
+        logger.info(f"Table columns: {column_names}")
+        
+        # Initialize ClickHouse table BEFORE chunking
+        from ..core.database import DatabaseManager
+        db_manager = DatabaseManager()
+        
+        # Drop existing table if it exists
+        drop_table_sql = f"DROP TABLE IF EXISTS bronze.{target_table}"
+        db_manager.execute_query(drop_table_sql)
+        
+        # Create table with proper column names
+        create_table_sql = f"""
+        CREATE TABLE bronze.{target_table} (
+            {', '.join([f'`{col}` String' for col in column_names])},
+            `create_date` String
+        ) ENGINE = MergeTree()
+        ORDER BY create_date
+        """
+        
+        db_manager.execute_query(create_table_sql)
+        logger.info(f"Created table bronze.{target_table} with columns: {column_names}")
+        
+        # Process in chunks - stream each chunk directly to ClickHouse
+        total_loaded = 0
         offset = 0
+        chunk_number = 1
+        total_chunks = math.ceil(total_count / chunk_size)
+        
+        logger.info(f"Starting chunked processing: {total_chunks} chunks of {chunk_size} records each")
         
         while offset < total_count:
             chunk_query = f"SELECT * FROM {table_name} LIMIT {chunk_size} OFFSET {offset}"
+            logger.info(f"Chunk {chunk_number}/{total_chunks}: Extracting records {offset+1} to {min(offset+chunk_size, total_count)}")
+            
             chunk_data = connector.execute_query(chunk_query)
             
             if not chunk_data:
+                logger.warning(f"Chunk {chunk_number}: No data returned, stopping processing")
                 break
             
-            all_data.extend(chunk_data)
-            offset += chunk_size
+            logger.info(f"Chunk {chunk_number}: Extracted {len(chunk_data)} records from database")
             
-            logger.info(f"Processed chunk: {offset}/{total_count} records")
-        
-        # Convert to string streams
-        string_data = _convert_database_results_to_strings(all_data)
+            # Convert chunk to string streams
+            string_data = _convert_database_results_to_strings(chunk_data)
+            logger.info(f"Chunk {chunk_number}: Converted to string streams")
+            
+            # Load chunk directly to ClickHouse
+            records_loaded = await _load_data_to_clickhouse(string_data, target_table, column_names)
+            total_loaded += records_loaded
+            
+            logger.info(f"Chunk {chunk_number}/{total_chunks}: Loaded {records_loaded} records to ClickHouse (Total: {total_loaded}/{total_count})")
+            
+            offset += chunk_size
+            chunk_number += 1
+            
+            # If we got fewer records than chunk_size, we're done
+            if len(chunk_data) < chunk_size:
+                logger.info(f"Chunk {chunk_number-1}: Got {len(chunk_data)} records (< {chunk_size}), processing complete")
+                break
         
         # Load to ClickHouse
-        records_loaded = await _load_data_to_clickhouse(string_data, target_table)
+        records_loaded = total_loaded
         
         return {
             "table_name": table_name,
             "target_table": target_table,
             "status": "success",
-            "records_processed": len(all_data),
+            "records_processed": total_count,
             "records_loaded": records_loaded,
             "chunk_size": chunk_size,
             "total_chunks": math.ceil(total_count / chunk_size)
@@ -1721,11 +1653,35 @@ async def _process_single_database_sql(connector, sql_query: str, target_table: 
                 "message": "Query returned no data"
             }
         
+        # Get column names from first row
+        column_names = list(data[0].keys())
+        logger.info(f"SQL query columns: {column_names}")
+        
+        # Initialize ClickHouse table BEFORE loading data
+        from ..core.database import DatabaseManager
+        db_manager = DatabaseManager()
+        
+        # Drop existing table if it exists
+        drop_table_sql = f"DROP TABLE IF EXISTS bronze.{target_table}"
+        db_manager.execute_query(drop_table_sql)
+        
+        # Create table with proper column names
+        create_table_sql = f"""
+        CREATE TABLE bronze.{target_table} (
+            {', '.join([f'`{col}` String' for col in column_names])},
+            `create_date` String
+        ) ENGINE = MergeTree()
+        ORDER BY create_date
+        """
+        
+        db_manager.execute_query(create_table_sql)
+        logger.info(f"Created table bronze.{target_table} with columns: {column_names}")
+        
         # Convert to string streams
         string_data = _convert_database_results_to_strings(data)
         
         # Load to ClickHouse
-        records_loaded = await _load_data_to_clickhouse(string_data, target_table)
+        records_loaded = await _load_data_to_clickhouse(string_data, target_table, column_names)
         
         return {
             "sql_query": sql_query,
@@ -1766,3 +1722,61 @@ def _convert_database_results_to_strings(data: List[Dict[str, Any]]) -> List[Dic
     except Exception as e:
         logger.error(f"Error converting database results to strings: {e}")
         return []
+
+async def _load_data_to_clickhouse(data: List[Dict[str, Any]], target_table: str, column_names: List[str] = None) -> int:
+    """Load data to ClickHouse bronze layer."""
+    try:
+        from ..core.database import DatabaseManager
+        
+        db_manager = DatabaseManager()
+        
+        if not data:
+            return 0
+        
+        # Use provided column names or generate generic ones
+        if column_names:
+            columns = column_names
+        else:
+            columns = list(data[0].keys())
+        
+        # Insert data in batches for efficiency
+        records_inserted = 0
+        create_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        batch_size = 1000
+        total_batches = math.ceil(len(data) / batch_size)
+        
+        logger.info(f"Loading {len(data)} records to ClickHouse in {total_batches} batches of {batch_size}")
+        
+        for i in range(0, len(data), batch_size):
+            batch = data[i:i + batch_size]
+            batch_number = (i // batch_size) + 1
+            
+            logger.info(f"Processing batch {batch_number}/{total_batches}: {len(batch)} records")
+            
+            # Prepare batch insert
+            values_list = []
+            for row in batch:
+                values = []
+                for col_name in columns:
+                    value = str(row[col_name]) if row[col_name] is not None else ''
+                    escaped_value = value.replace("'", "''")
+                    values.append(f"'{escaped_value}'")
+                values.append(f"'{create_date}'")
+                values_list.append(f"({', '.join(values)})")
+            
+            # Execute batch insert
+            insert_sql = f"""
+            INSERT INTO bronze.{target_table} ({', '.join([f'`{col}`' for col in columns])}, `create_date`)
+            VALUES {', '.join(values_list)}
+            """
+            
+            db_manager.execute_query(insert_sql)
+            records_inserted += len(batch)
+            
+            logger.info(f"Batch {batch_number}/{total_batches}: Inserted {len(batch)} records (Total: {records_inserted})")
+        
+        return records_inserted
+        
+    except Exception as e:
+        logger.error(f"Error loading data to ClickHouse: {e}")
+        raise

@@ -6,7 +6,7 @@ Supports multiple database types with a unified interface.
 """
 
 import json
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, Tuple
 from abc import ABC, abstractmethod
 
 from .config import Config
@@ -88,16 +88,19 @@ class DatabaseManager:
             self.logger.error(f"Connection test error: {str(e)}")
             return False
     
-    def execute_query(self, query: str, connection_type: str = "clickhouse") -> Optional[List[Dict[str, Any]]]:
+    def execute_query(self, query: str, connection_type: str = "clickhouse") -> Optional[List[Tuple]]:
         """
-        Execute a SQL query.
+        Execute a SQL query and return results as tuples.
+        
+        USED BY: Acquire phase (chunking, data extraction)
+        RETURNS: List of tuples for tuple-based access (e.g., result[0][0])
         
         Args:
             query (str): SQL query to execute
             connection_type (str): Type of connection to use
             
         Returns:
-            Optional[List[Dict[str, Any]]]: Query results
+            Optional[List[Tuple]]: Query results as tuples
         """
         try:
             conn = self.get_connection(connection_type)
@@ -105,13 +108,9 @@ class DatabaseManager:
                 # Execute ClickHouse query
                 result = conn.query(query)
                 
-                # Convert result to list of dictionaries
+                # Convert result to list of tuples (for Acquire phase compatibility)
                 if result.result_rows:
-                    columns = list(result.column_names)  # column_names is already a tuple of strings
-                    rows = []
-                    for row in result.result_rows:
-                        rows.append(dict(zip(columns, row)))
-                    return rows
+                    return list(result.result_rows)
                 else:
                     return []
             else:

@@ -56,8 +56,8 @@ app.add_middleware(
 # Each router handles a specific phase of the KIMBALL pipeline
 app.include_router(acquire_router, tags=["Acquire"])
 app.include_router(discover_router, tags=["Discover"])
-app.include_router(transform_router, tags=["Transform"])
 app.include_router(model_router, tags=["Model"])
+app.include_router(transform_router, tags=["Transform"])
 
 # Future phases (commented out for systematic testing)
 # app.include_router(build_router, tags=["Build"])
@@ -68,7 +68,7 @@ async def root():
     return {
         "message": "KIMBALL API - Kinetic Intelligent Model Builder",
         "version": "2.0.0",
-        "phases": ["Acquire", "Discover", "Transform", "Model"],  # Currently active phases
+        "phases": ["Acquire", "Discover", "Model", "Transform"],  # Currently active phases
         "docs": "/docs",
         "redoc": "/redoc"
     }

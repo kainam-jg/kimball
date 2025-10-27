@@ -1194,3 +1194,394 @@ async def export_metadata(request: DiscoveryRequest):
     except Exception as e:
         logger.error(f"Error exporting metadata: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# DISCOVERY API ENDPOINTS
+# ============================================================================
+
+@discover_router.get("/status")
+async def get_discover_status():
+    """Get Discovery phase status."""
+    try:
+        db_manager = DatabaseManager()
+        
+        # Check if metadata.discover table exists
+        discover_table_exists = db_manager.execute_query(
+            "SELECT count() FROM system.tables WHERE database = 'metadata' AND name = 'discover'"
+        )
+        
+        # Get count of analyzed tables
+        if discover_table_exists and discover_table_exists[0][0] > 0:
+            analyzed_tables = db_manager.execute_query(
+                "SELECT count(DISTINCT original_table_name) FROM metadata.discover"
+            )
+            analyzed_count = analyzed_tables[0][0] if analyzed_tables else 0
+        else:
+            analyzed_count = 0
+        
+        return {
+            "phase": "Discover",
+            "status": "active",
+            "metadata_table_exists": discover_table_exists[0][0] > 0 if discover_table_exists else False,
+            "tables_analyzed": analyzed_count,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting discover status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@discover_router.post("/analyze")
+async def analyze_bronze_schema(request: DiscoveryRequest):
+    """
+    Analyze bronze schema and create metadata.discover table.
+    
+    This endpoint performs comprehensive analysis of bronze tables including:
+    - Data type inference from string values
+    - Fact vs dimension classification
+    - Primary key candidate identification
+    - Data quality assessment
+    """
+    try:
+        logger.info(f"Starting bronze schema analysis for schema: {request.schema_name}")
+        
+        db_manager = DatabaseManager()
+        
+        # Get all tables in bronze schema
+        tables_query = f"""
+        SELECT name 
+        FROM system.tables 
+        WHERE database = '{request.schema_name}' 
+        AND engine != 'System'
+        ORDER BY name
+        """
+        
+        tables_result = db_manager.execute_query(tables_query)
+        table_names = [row[0] for row in tables_result] if tables_result else []
+        
+        if not table_names:
+            return {
+                "status": "success",
+                "message": f"No tables found in {request.schema_name} schema",
+                "tables_analyzed": 0,
+                "total_columns": 0
+            }
+        
+        logger.info(f"Found {len(table_names)} tables to analyze: {table_names}")
+        
+        # Create metadata.discover table if it doesn't exist
+        create_table_query = """
+        CREATE TABLE IF NOT EXISTS metadata.discover (
+            original_table_name String,
+            original_column_name String,
+            new_table_name String,
+            new_column_name String,
+            inferred_type String,
+            classification String,
+            cardinality UInt64,
+            null_count UInt64,
+            sample_values Array(String),
+            data_quality_score Float64,
+            version UInt64,
+            created_at DateTime DEFAULT now(),
+            updated_at DateTime DEFAULT now()
+        ) ENGINE = ReplacingMergeTree(version)
+        ORDER BY (original_table_name, original_column_name)
+        """
+        
+        db_manager.execute_query(create_table_query)
+        logger.info("Created metadata.discover table")
+        
+        # Analyze each table
+        total_columns = 0
+        analysis_results = []
+        
+        for table_name in table_names:
+            logger.info(f"Analyzing table: {table_name}")
+            
+            # Get column information
+            columns_query = f"""
+            SELECT name, type 
+            FROM system.columns 
+            WHERE database = '{request.schema_name}' 
+            AND table = '{table_name}'
+            AND name != 'create_date'
+            ORDER BY position
+            """
+            
+            columns_result = db_manager.execute_query(columns_query)
+            
+            for column_name, column_type in columns_result or []:
+                logger.info(f"Analyzing column: {table_name}.{column_name}")
+                
+                # Get sample data for analysis
+                sample_query = f"""
+                SELECT {column_name} 
+                FROM {request.schema_name}.{table_name} 
+                WHERE {column_name} IS NOT NULL 
+                AND {column_name} != ''
+                LIMIT {request.sample_size}
+                """
+                
+                try:
+                    sample_result = db_manager.execute_query(sample_query)
+                    sample_values = [str(row[0]) for row in sample_result] if sample_result else []
+                except Exception as e:
+                    logger.warning(f"Could not get sample data for {table_name}.{column_name}: {e}")
+                    sample_values = []
+                
+                # Get cardinality and null count
+                cardinality_query = f"""
+                SELECT 
+                    count(DISTINCT {column_name}) as cardinality,
+                    count() - count({column_name}) as null_count
+                FROM {request.schema_name}.{table_name}
+                """
+                
+                try:
+                    stats_result = db_manager.execute_query(cardinality_query)
+                    cardinality = stats_result[0][0] if stats_result else 0
+                    null_count = stats_result[0][1] if stats_result else 0
+                except Exception as e:
+                    logger.warning(f"Could not get stats for {table_name}.{column_name}: {e}")
+                    cardinality = 0
+                    null_count = 0
+                
+                # Use intelligent type inference
+                inference_result = type_inference_engine.infer_column_type(sample_values, column_name)
+                
+                # Classify as fact or dimension
+                classification = "fact" if inference_result.inferred_type in ["numeric", "integer", "decimal", "float"] else "dimension"
+                
+                # Calculate data quality score
+                total_records = cardinality + null_count
+                quality_score = (cardinality / total_records) if total_records > 0 else 0.0
+                
+                # Insert metadata
+                sample_values_str = "[" + ",".join([f"'{v.replace(chr(39), chr(39)+chr(39))}'" for v in sample_values[:5]]) + "]"
+                insert_query = f"""
+                INSERT INTO metadata.discover VALUES (
+                    '{table_name}',
+                    '{table_name}',
+                    '{column_name}',
+                    '{column_name}',
+                    '{column_type}',
+                    '{inference_result.inferred_type}',
+                    {inference_result.confidence},
+                    '{inference_result.pattern_matched or ""}',
+                    '{inference_result.reasoning}',
+                    {cardinality},
+                    {null_count},
+                    {(null_count / (cardinality + null_count)) * 100 if (cardinality + null_count) > 0 else 0},
+                    '{classification}',
+                    0.8,
+                    'Auto-classified based on data type',
+                    0,
+                    {quality_score},
+                    {cardinality / (cardinality + null_count) if (cardinality + null_count) > 0 else 0},
+                    {sample_values_str},
+                    now(),
+                    now(),
+                    1
+                )
+                """
+                
+                db_manager.execute_query(insert_query)
+                
+                analysis_results.append({
+                    "table_name": table_name,
+                    "column_name": column_name,
+                    "inferred_type": inference_result.inferred_type,
+                    "classification": classification,
+                    "cardinality": cardinality,
+                    "quality_score": quality_score
+                })
+                
+                total_columns += 1
+        
+        logger.info(f"Analysis complete. Analyzed {total_columns} columns across {len(table_names)} tables")
+        
+        return {
+            "status": "success",
+            "message": f"Successfully analyzed {len(table_names)} tables with {total_columns} columns",
+            "schema_name": request.schema_name,
+            "tables_analyzed": len(table_names),
+            "total_columns": total_columns,
+            "analysis_results": analysis_results[:10],  # Return first 10 for preview
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error analyzing bronze schema: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@discover_router.get("/metadata")
+async def get_discover_metadata(table_name: Optional[str] = None):
+    """
+    Get discovery metadata for all tables or a specific table.
+    
+    Args:
+        table_name: Optional table name to filter results
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        if table_name:
+            query = f"""
+            SELECT 
+                original_table_name,
+                original_column_name,
+                new_table_name,
+                new_column_name,
+                inferred_type,
+                classification,
+                cardinality,
+                null_count,
+                sample_values,
+                data_quality_score,
+                created_at,
+                updated_at
+            FROM metadata.discover
+            WHERE original_table_name = '{table_name}'
+            ORDER BY original_column_name
+            """
+        else:
+            query = """
+            SELECT 
+                original_table_name,
+                original_column_name,
+                new_table_name,
+                new_column_name,
+                inferred_type,
+                classification,
+                cardinality,
+                null_count,
+                sample_values,
+                data_quality_score,
+                created_at,
+                updated_at
+            FROM metadata.discover
+            ORDER BY original_table_name, original_column_name
+            """
+        
+        result = db_manager.execute_query(query)
+        
+        metadata = []
+        for row in result or []:
+            metadata.append({
+                "original_table_name": row[0],
+                "original_column_name": row[1],
+                "new_table_name": row[2],
+                "new_column_name": row[3],
+                "inferred_type": row[4],
+                "classification": row[5],
+                "cardinality": row[6],
+                "null_count": row[7],
+                "sample_values": row[8],
+                "data_quality_score": row[9],
+                "created_at": row[10].isoformat() if row[10] else None,
+                "updated_at": row[11].isoformat() if row[11] else None
+            })
+        
+        return {
+            "status": "success",
+            "table_name": table_name,
+            "total_columns": len(metadata),
+            "metadata": metadata
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting discover metadata: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@discover_router.put("/metadata")
+async def edit_discover_metadata(request: MetadataEditRequest):
+    """
+    Edit discovery metadata for a specific column.
+    
+    Allows editing of:
+    - new_table_name (updates all columns for that table)
+    - new_column_name
+    - inferred_type
+    - classification
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # Build update fields
+        update_fields = []
+        
+        if request.new_table_name:
+            update_fields.append(f"new_table_name = '{request.new_table_name}'")
+            
+            # If updating table name, update all columns for that table
+            if request.new_table_name != request.original_table_name:
+                bulk_update_query = f"""
+                INSERT INTO metadata.discover VALUES (
+                    '{request.original_table_name}',
+                    original_column_name,
+                    '{request.new_table_name}',
+                    new_column_name,
+                    inferred_type,
+                    classification,
+                    cardinality,
+                    null_count,
+                    sample_values,
+                    data_quality_score,
+                    version + 1,
+                    created_at,
+                    now()
+                )
+                """
+                db_manager.execute_query(bulk_update_query)
+        
+        if request.new_column_name:
+            update_fields.append(f"new_column_name = '{request.new_column_name}'")
+        
+        if request.inferred_type:
+            update_fields.append(f"inferred_type = '{request.inferred_type}'")
+        
+        if request.classification:
+            update_fields.append(f"classification = '{request.classification}'")
+        
+        if not update_fields:
+            return {
+                "status": "error",
+                "message": "No fields to update"
+            }
+        
+        # Add version and timestamp updates
+        update_fields.append("version = version + 1")
+        update_fields.append("updated_at = now()")
+        
+        # Perform upsert
+        insert_query = f"""
+        INSERT INTO metadata.discover VALUES (
+            '{request.original_table_name}',
+            '{request.original_column_name}',
+            '{request.new_table_name or request.original_table_name}',
+            '{request.new_column_name or request.original_column_name}',
+            '{request.inferred_type or 'string'}',
+            '{request.classification or 'dimension'}',
+            cardinality,
+            null_count,
+            sample_values,
+            data_quality_score,
+            version + 1,
+            created_at,
+            now()
+        )
+        """
+        
+        db_manager.execute_query(insert_query)
+        
+        return {
+            "status": "success",
+            "message": f"Updated metadata for {request.original_table_name}.{request.original_column_name}",
+            "updated_fields": [field.split(' = ')[0] for field in update_fields[:-2]],  # Exclude version and timestamp
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error editing discover metadata: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

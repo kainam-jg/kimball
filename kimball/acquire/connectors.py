@@ -51,7 +51,7 @@ class DatabaseConnector(BaseConnector):
     def connect(self) -> bool:
         """Connect to database."""
         try:
-            if self.db_type == "postgres":
+            if self.db_type in ["postgres", "postgresql"]:
                 # PostgreSQL connection
                 host = self.config.get("host")
                 port = self.config.get("port", 5432)
@@ -103,7 +103,7 @@ class DatabaseConnector(BaseConnector):
             return False
         
         try:
-            if self.db_type == "postgres":
+            if self.db_type in ["postgres", "postgresql"]:
                 with self.connection.connect() as conn:
                     conn.execute(text("SELECT 1"))
             elif self.db_type == "clickhouse":
@@ -124,7 +124,7 @@ class DatabaseConnector(BaseConnector):
             
             tables = []
             
-            if self.db_type == "postgres":
+            if self.db_type in ["postgres", "postgresql"]:
                 with self.connection.connect() as conn:
                     query = """
                     SELECT table_name, table_schema 
@@ -168,7 +168,7 @@ class DatabaseConnector(BaseConnector):
             
             results = []
             
-            if self.db_type == "postgres":
+            if self.db_type in ["postgres", "postgresql"]:
                 with self.connection.connect() as conn:
                     result = conn.execute(text(query))
                     for row in result:
