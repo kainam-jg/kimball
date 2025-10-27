@@ -2,16 +2,13 @@
 KIMBALL FastAPI Main Application
 
 This is the main FastAPI application that orchestrates all KIMBALL services.
-It provides a unified API for the five phases: Acquire, Discover, Transformation, Model, Build.
+It provides a unified API for the four phases: Acquire, Discover, Transform, Model.
 
 Current Active Phases:
 - Acquire: Data source management and data extraction
 - Discover: Metadata analysis and intelligent type inference
-- Transformation: ELT orchestration with ClickHouse UDFs
+- Transform: ELT orchestration with ClickHouse UDFs
 - Model: ERD generation and dimensional hierarchy analysis
-
-Future Phases:
-- Build: Pipeline generation and orchestration
 """
 
 from fastapi import FastAPI, HTTPException
@@ -23,7 +20,7 @@ from typing import Dict, Any
 # Import active API routers
 from .acquire_routes import acquire_router
 from .discover_routes import discover_router
-from .transformation_routes import transformation_router
+from .transform_routes import transform_router
 from .model_routes import model_router
 
 # Future phases (commented out for systematic testing)
@@ -59,7 +56,7 @@ app.add_middleware(
 # Each router handles a specific phase of the KIMBALL pipeline
 app.include_router(acquire_router, tags=["Acquire"])
 app.include_router(discover_router, tags=["Discover"])
-app.include_router(transformation_router, tags=["Transformation"])
+app.include_router(transform_router, tags=["Transform"])
 app.include_router(model_router, tags=["Model"])
 
 # Future phases (commented out for systematic testing)
@@ -71,7 +68,7 @@ async def root():
     return {
         "message": "KIMBALL API - Kinetic Intelligent Model Builder",
         "version": "2.0.0",
-        "phases": ["Acquire", "Discover", "Transformation", "Model"],  # Currently active phases
+        "phases": ["Acquire", "Discover", "Transform", "Model"],  # Currently active phases
         "docs": "/docs",
         "redoc": "/redoc"
     }

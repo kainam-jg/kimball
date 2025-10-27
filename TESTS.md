@@ -6,11 +6,10 @@ This document contains comprehensive CURL commands for testing all KIMBALL API e
 
 1. [Acquire Phase](#acquire-phase)
 2. [Discover Phase](#discover-phase)
-3. [Transformation Phase](#transformation-phase)
+3. [Transform Phase](#transform-phase)
 4. [Model Phase](#model-phase-active)
-5. [Build Phase](#build-phase-coming-soon)
-6. [General API Endpoints](#general-api-endpoints)
-7. [Testing Workflows](#testing-workflows)
+5. [General API Endpoints](#general-api-endpoints)
+6. [Testing Workflows](#testing-workflows)
 
 ---
 
@@ -297,50 +296,50 @@ curl -X POST "http://localhost:8000/api/v1/discover/learn/correction" \
 
 ---
 
-## 🔄 **Transformation Phase**
+## 🔄 **Transform Phase** ✅ **ACTIVE**
 
-### **Transformation Management**
+### **Transform Management**
 
 #### **Get Transformation Status**
 ```bash
-curl -X GET "http://localhost:8000/api/v1/transformation/status"
+curl -X GET "http://localhost:8000/api/v1/transform/status"
 ```
 
 #### **List All UDFs**
 ```bash
-curl -X GET "http://localhost:8000/api/v1/transformation/udfs"
+curl -X GET "http://localhost:8000/api/v1/transform/udfs"
 ```
 
 #### **List UDFs with Filtering**
 ```bash
 # Filter by stage
-curl -X GET "http://localhost:8000/api/v1/transformation/udfs?stage=stage1"
+curl -X GET "http://localhost:8000/api/v1/transform/udfs?stage=stage1"
 
 # Filter by schema
-curl -X GET "http://localhost:8000/api/v1/transformation/udfs?schema=default"
+curl -X GET "http://localhost:8000/api/v1/transform/udfs?schema=default"
 
 # Filter by both stage and schema
-curl -X GET "http://localhost:8000/api/v1/transformation/udfs?stage=stage1&schema=default"
+curl -X GET "http://localhost:8000/api/v1/transform/udfs?stage=stage1&schema=default"
 
 # Limit results
-curl -X GET "http://localhost:8000/api/v1/transformation/udfs?limit=10"
+curl -X GET "http://localhost:8000/api/v1/transform/udfs?limit=10"
 ```
 
 #### **Get Specific UDF**
 ```bash
-curl -X GET "http://localhost:8000/api/v1/transformation/udfs/transform_daily_sales_to_silver"
+curl -X GET "http://localhost:8000/api/v1/transform/udfs/transform_daily_sales_to_silver"
 ```
 
 #### **Get All UDF Schemas**
 ```bash
-curl -X GET "http://localhost:8000/api/v1/transformation/schemas"
+curl -X GET "http://localhost:8000/api/v1/transform/schemas"
 ```
 
 ### **UDF Operations**
 
 #### **Create New UDF**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/transformation/udfs" \
+curl -X POST "http://localhost:8000/api/v1/transform/udfs" \
   -H "Content-Type: application/json" \
   -d '{
     "transformation_stage": "stage1",
@@ -355,7 +354,7 @@ curl -X POST "http://localhost:8000/api/v1/transformation/udfs" \
 
 #### **Update Existing UDF**
 ```bash
-curl -X PUT "http://localhost:8000/api/v1/transformation/udfs/transform_daily_sales_to_silver" \
+curl -X PUT "http://localhost:8000/api/v1/transform/udfs/transform_daily_sales_to_silver" \
   -H "Content-Type: application/json" \
   -d '{
     "udf_logic": "INSERT INTO silver.sales_transactions_stage1 SELECT toDateTime(create_date) as create_date, toFloat64(amount_sales) as amount_sales, dealer_name as dealer_name, toDate(sales_date) as sales_date, vehicle_model as vehicle_model FROM bronze.daily_sales WHERE create_date >= toDate(now()) - INTERVAL 2 DAY",
@@ -365,7 +364,7 @@ curl -X PUT "http://localhost:8000/api/v1/transformation/udfs/transform_daily_sa
 
 #### **Create UDF Function in ClickHouse**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/transformation/udfs/create" \
+curl -X POST "http://localhost:8000/api/v1/transform/udfs/create" \
   -H "Content-Type: application/json" \
   -d '{
     "udf_name": "transform_daily_sales_to_silver",
@@ -377,7 +376,7 @@ curl -X POST "http://localhost:8000/api/v1/transformation/udfs/create" \
 #### **Execute UDF**
 ```bash
 # Execute with dry run
-curl -X POST "http://localhost:8000/api/v1/transformation/udfs/execute" \
+curl -X POST "http://localhost:8000/api/v1/transform/udfs/execute" \
   -H "Content-Type: application/json" \
   -d '{
     "udf_name": "transform_daily_sales_to_silver",
@@ -385,7 +384,7 @@ curl -X POST "http://localhost:8000/api/v1/transformation/udfs/execute" \
   }'
 
 # Execute for real
-curl -X POST "http://localhost:8000/api/v1/transformation/udfs/execute" \
+curl -X POST "http://localhost:8000/api/v1/transform/udfs/execute" \
   -H "Content-Type: application/json" \
   -d '{
     "udf_name": "transform_daily_sales_to_silver",
@@ -396,12 +395,12 @@ curl -X POST "http://localhost:8000/api/v1/transformation/udfs/execute" \
 
 #### **Execute All Stage 1 Transformations**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/transformation/transformations/stage1"
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/stage1"
 ```
 
 #### **Execute All Stage 2 CDC Transformations**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/transformation/transformations/stage2"
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/stage2"
 ```
 
 ---
@@ -667,41 +666,6 @@ curl -X DELETE "http://localhost:8000/api/v1/model/hierarchies/dealers?hierarchy
 
 ---
 
-## 🚀 **Build Phase** (Coming Soon)
-
-### **DAG Generation**
-```bash
-curl -X POST "http://localhost:8000/api/v1/build/dag" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "pipeline_name": "sales_pipeline",
-    "stages": ["acquire", "discover", "transform", "model"]
-  }'
-```
-
-### **SQL Generation**
-```bash
-curl -X POST "http://localhost:8000/api/v1/build/sql" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "transformation_type": "bronze_to_silver",
-    "source_tables": ["daily_sales", "dealer_regions"],
-    "target_schema": "silver"
-  }'
-```
-
-### **Pipeline Creation**
-```bash
-curl -X POST "http://localhost:8000/api/v1/build/pipeline" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "pipeline_name": "sales_data_pipeline",
-    "schedule": "daily",
-    "dependencies": ["acquire", "discover", "transform"]
-  }'
-```
-
----
 
 ## 🌐 **General API Endpoints**
 
@@ -771,23 +735,23 @@ curl -X PUT "http://localhost:8000/api/v1/discover/metadata/edit" \
   -d '{"original_table_name": "daily_sales", "original_column_name": "amount_sales", "new_column_name": "sales_amount"}'
 ```
 
-#### **3. Transformation Phase**
+#### **3. Transform Phase**
 ```bash
 # Execute Stage 1 transformations
-curl -X POST "http://localhost:8000/api/v1/transformation/transformations/stage1"
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/stage1"
 
 # Check transformation status
-curl -X GET "http://localhost:8000/api/v1/transformation/status"
+curl -X GET "http://localhost:8000/api/v1/transform/status"
 
 # List UDFs
-curl -X GET "http://localhost:8000/api/v1/transformation/udfs"
+curl -X GET "http://localhost:8000/api/v1/transform/udfs"
 ```
 
 ### **Custom UDF Testing Workflow**
 
 #### **1. Create Custom UDF**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/transformation/udfs" \
+curl -X POST "http://localhost:8000/api/v1/transform/udfs" \
   -H "Content-Type: application/json" \
   -d '{
     "transformation_stage": "stage2",
@@ -802,7 +766,7 @@ curl -X POST "http://localhost:8000/api/v1/transformation/udfs" \
 
 #### **2. Create UDF Function in ClickHouse**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/transformation/udfs/create" \
+curl -X POST "http://localhost:8000/api/v1/transform/udfs/create" \
   -H "Content-Type: application/json" \
   -d '{
     "udf_name": "custom_aggregation_udf",
@@ -813,7 +777,7 @@ curl -X POST "http://localhost:8000/api/v1/transformation/udfs/create" \
 
 #### **3. Execute Custom UDF**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/transformation/udfs/execute" \
+curl -X POST "http://localhost:8000/api/v1/transform/udfs/execute" \
   -H "Content-Type: application/json" \
   -d '{
     "udf_name": "custom_aggregation_udf",
@@ -832,7 +796,7 @@ curl -X POST "http://localhost:8000/api/v1/acquire/datasources/test" \
 
 #### **Test Invalid UDF**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/transformation/udfs/execute" \
+curl -X POST "http://localhost:8000/api/v1/transform/udfs/execute" \
   -H "Content-Type: application/json" \
   -d '{
     "udf_name": "non_existent_udf",
@@ -864,7 +828,7 @@ curl -X POST "http://localhost:8000/api/v1/transformation/udfs/execute" \
 ```json
 {
   "status": "active",
-  "phase": "Transformation",
+  "phase": "Transform",
   "description": "ELT transformation orchestration with ClickHouse UDFs",
   "total_udfs": 4,
   "total_schemas": 1

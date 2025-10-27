@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Transformation Phase API Routes
+Transform Phase API Routes
 
 This module handles UDF (User-Defined Function) management, creation, updating, 
 and execution for ELT transformations in the KIMBALL pipeline.
@@ -9,7 +9,7 @@ Key Features:
 - UDF lifecycle management (create, read, update, delete)
 - Schema-based UDF organization
 - ClickHouse UDF function creation and execution
-- Transformation orchestration by stage
+- Transform orchestration by stage
 - Real-time monitoring and metrics
 
 Architecture:
@@ -17,6 +17,7 @@ Architecture:
 - Multi-stage processing (Bronze → Silver → Gold)
 - Metadata-driven transformations with dependencies
 - Version control and upsert functionality
+- Gold layer dimensional model generation
 """
 
 from fastapi import APIRouter, HTTPException, Query
@@ -31,7 +32,7 @@ from ..core.database import DatabaseManager
 logger = logging.getLogger(__name__)
 
 # Create router for Transformation Phase API endpoints
-transformation_router = APIRouter(prefix="/api/v1/transformation", tags=["Transformation"])
+transform_router = APIRouter(prefix="/api/v1/transform", tags=["Transform"])
 
 # Pydantic models for request/response validation
 class UDFRequest(BaseModel):
@@ -43,6 +44,10 @@ class UDFRequest(BaseModel):
     udf_schema_name: str = "default"
     dependencies: List[str] = []
     execution_frequency: str = "daily"
+    source_schema: Optional[str] = None
+    source_table: Optional[str] = None
+    target_schema: Optional[str] = None
+    target_table: Optional[str] = None
 
 class UDFUpdateRequest(BaseModel):
     """Request model for updating existing UDFs."""
@@ -74,7 +79,7 @@ class TransformationStatus(BaseModel):
 
 # API Endpoints
 
-@transformation_router.get("/status")
+@transform_router.get("/status")
 async def get_transformation_status():
     """
     Get overall transformation phase status.
@@ -114,7 +119,7 @@ async def get_transformation_status():
         
         return {
             "status": "active",
-            "phase": "Transformation",
+            "phase": "Transform",
             "description": "ELT transformation orchestration with ClickHouse UDFs",
             "udf_counts_by_stage": {row["transformation_stage"]: row["udf_count"] for row in udf_counts} if udf_counts else {},
             "udf_counts_by_schema": {row["udf_schema_name"]: row["udf_count"] for row in schema_counts} if schema_counts else {},
@@ -126,7 +131,7 @@ async def get_transformation_status():
         logger.error(f"Error getting transformation status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@transformation_router.get("/udfs")
+@transform_router.get("/udfs")
 async def get_udfs(
     stage: Optional[str] = Query(None, description="Filter by transformation stage"),
     schema: Optional[str] = Query(None, description="Filter by UDF schema name"),
@@ -166,6 +171,10 @@ async def get_udfs(
             udf_schema_name,
             dependencies,
             execution_frequency,
+            source_schema,
+            source_table,
+            target_schema,
+            target_table,
             created_at,
             updated_at,
             version
@@ -189,7 +198,7 @@ async def get_udfs(
         logger.error(f"Error getting UDFs: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@transformation_router.get("/udfs/{udf_name}")
+@transform_router.get("/udfs/{udf_name}")
 async def get_udf_by_name(udf_name: str):
     """Get a specific UDF by name."""
     try:
@@ -204,6 +213,10 @@ async def get_udf_by_name(udf_name: str):
             udf_schema_name,
             dependencies,
             execution_frequency,
+            source_schema,
+            source_table,
+            target_schema,
+            target_table,
             created_at,
             updated_at,
             version
@@ -227,7 +240,7 @@ async def get_udf_by_name(udf_name: str):
         logger.error(f"Error getting UDF {udf_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@transformation_router.post("/udfs")
+@transform_router.post("/udfs")
 async def create_udf(request: UDFRequest):
     """
     Create a new UDF with metadata.
@@ -265,6 +278,10 @@ async def create_udf(request: UDFRequest):
             udf_schema_name,
             dependencies,
             execution_frequency,
+            source_schema,
+            source_table,
+            target_schema,
+            target_table,
             version
         ) VALUES (
             '{request.transformation_stage}',
@@ -274,6 +291,10 @@ async def create_udf(request: UDFRequest):
             '{request.udf_schema_name}',
             {request.dependencies},
             '{request.execution_frequency}',
+            '{request.source_schema or ''}',
+            '{request.source_table or ''}',
+            '{request.target_schema or ''}',
+            '{request.target_table or ''}',
             {new_version}
         )
         """
@@ -293,7 +314,7 @@ async def create_udf(request: UDFRequest):
         logger.error(f"Error creating UDF: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@transformation_router.put("/udfs/{udf_name}")
+@transform_router.put("/udfs/{udf_name}")
 async def update_udf(udf_name: str, request: UDFUpdateRequest):
     """Update an existing UDF."""
     try:
@@ -370,7 +391,7 @@ async def update_udf(udf_name: str, request: UDFUpdateRequest):
         logger.error(f"Error updating UDF {udf_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@transformation_router.post("/udfs/create")
+@transform_router.post("/udfs/create")
 async def create_udf_in_clickhouse(request: UDFCreationRequest):
     """
     Create the actual UDF function in ClickHouse.
@@ -437,7 +458,7 @@ async def create_udf_in_clickhouse(request: UDFCreationRequest):
         logger.error(f"Error creating UDF in ClickHouse: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@transformation_router.post("/udfs/execute")
+@transform_router.post("/udfs/execute")
 async def execute_udf(request: UDFExecutionRequest):
     """Execute a UDF."""
     try:
@@ -501,7 +522,7 @@ async def execute_udf(request: UDFExecutionRequest):
         logger.error(f"Error executing UDF: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@transformation_router.post("/transformations/stage1")
+@transform_router.post("/transformations/stage1")
 async def execute_stage1_transformations():
     """
     Execute all Stage 1 transformations (Bronze to Silver).
@@ -584,7 +605,7 @@ async def execute_stage1_transformations():
         logger.error(f"Error executing Stage 1 transformations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@transformation_router.post("/transformations/stage2")
+@transform_router.post("/transformations/stage2")
 async def execute_stage2_transformations():
     """
     Execute all Stage 2 transformations (Silver Stage1 to Silver Stage2 CDC).
@@ -679,7 +700,7 @@ async def execute_stage2_transformations():
         logger.error(f"Error executing Stage 2 transformations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@transformation_router.get("/schemas")
+@transform_router.get("/schemas")
 async def get_udf_schemas():
     """Get all UDF schemas and their UDF counts."""
     try:

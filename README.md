@@ -38,12 +38,16 @@ KIMBALL follows a four-phase approach:
 - **Relationship discovery** and join candidate identification
 - **Primary key detection** and foreign key mapping
 
-### 3. **Transformation Phase** ✅ **COMPLETE**
+### 3. **Transform Phase** ✅ **COMPLETE**
 - **ELT Architecture**: Extract, Load, Transform using ClickHouse UDFs
-- **Transformation Orchestration**: Automated UDF execution with dependency management
+- **Transform Orchestration**: Automated UDF execution with dependency management
 - **Delta Lake Framework**: Standardized change data capture and versioning
 - **Metadata-Driven Transformations**: UDF logic stored in `metadata.transformation1` table
 - **Multi-Stage Processing**: Bronze → Silver → Gold with stage-specific transformations
+- **Stage 1 Transformations**: Bronze to Silver data type conversion and cleaning
+- **Stage 2 CDC**: Change Data Capture for Silver layer current data
+- **Stage 3 Dimensional Model**: Silver to Gold star schema generation
+- **Gold Layer Architecture**: Dimensional star schema with `_dim` and `_fact` suffixes
 - **Rollback Capabilities**: Transaction-safe transformations with rollback support
 - **Monitoring & Logging**: Comprehensive transformation monitoring and audit trails
 
@@ -94,25 +98,22 @@ The Model Phase provides comprehensive ERD and hierarchy analysis for dimensiona
 - **Soft Deletion**: Remove relationships and hierarchies while preserving audit history
 - **Bulk Operations**: Update multiple relationships or hierarchy levels in single operations
 
-### 5. **Build Phase** 🔄 **COMING SOON**
-- **Pipeline Generation**: Automated data pipeline creation
-- **Orchestration**: Workflow management and scheduling
-- **Monitoring**: Real-time pipeline monitoring and alerting
-- **Deployment**: Production deployment automation
+#### **🔄 ELT Transform Architecture**
 
-#### **🔄 ELT Transformation Architecture**
-
-The Transformation Phase implements a sophisticated ELT (Extract, Load, Transform) architecture using ClickHouse UDFs for data processing:
+The Transform Phase implements a sophisticated ELT (Extract, Load, Transform) architecture using ClickHouse UDFs for data processing:
 
 ##### **Multi-Stage Processing Pipeline**
 - **Bronze Layer**: Raw data from various sources (S3, PostgreSQL, APIs)
 - **Silver Layer**: Cleaned and typed data with business logic applied
 - **Gold Layer**: Aggregated and optimized data for analytics
 
-##### **Key Components**
-- **UDF Management**: User-Defined Functions stored in `metadata.transformation1`
-- **Schema Organization**: UDFs organized by schema (`udf_schema_name`)
-- **Dependency Management**: UDF execution order and dependencies
+##### **Gold Layer Dimensional Model**
+- **Dimension Tables**: Tables with `_dim` suffix (e.g., `dealers_dim`, `vehicles_dim`)
+- **Fact Tables**: Tables with `_fact` suffix (e.g., `sales_fact`)
+- **Star Schema**: Traditional dimensional modeling structure
+- **Stage 3 UDFs**: Transform Silver Stage 2 data into Gold dimensional model
+- **Metadata-Driven**: Uses Model Phase ERD and hierarchy analysis for transformation logic
+- **Source/Target Tracking**: New columns in `metadata.transformation1` track source and target schemas/tables
 - **Version Control**: Microsecond-precision versioning for upserts
 - **Execution Frequency**: Configurable execution schedules
 
@@ -187,12 +188,6 @@ ORDER BY (transformation_stage, udf_name)
 - **Hierarchical relationship modeling** (OLAP-style)
 - **Star schema design** for data warehouse optimization
 - **Silver layer (3NF)** and **Gold layer (star schema)** modeling
-
-### 5. **Build Phase** 🚀
-- **Automated DAG generation** for production pipelines
-- **SQL transformation** code generation
-- **Pipeline orchestration** and scheduling
-- **Monitoring and logging** infrastructure
 
 ## 🧠 Intelligent Type Inference System
 
@@ -634,27 +629,27 @@ Once the FastAPI backend is running, visit:
 - `POST /api/v1/discover/quality` - Assess data quality
 - `POST /api/v1/discover/relationships` - Find relationships
 
-#### Transformation Phase
-- `GET /api/v1/transformation/status` - Get transformation phase status
-- `GET /api/v1/transformation/udfs` - List all UDFs (with filtering by stage/schema)
-- `GET /api/v1/transformation/udfs/{udf_name}` - Get specific UDF details
-- `POST /api/v1/transformation/udfs` - Create new UDF
-- `PUT /api/v1/transformation/udfs/{udf_name}` - Update existing UDF
-- `POST /api/v1/transformation/udfs/create` - Create UDF function in ClickHouse
-- `POST /api/v1/transformation/udfs/execute` - Execute UDF
-- `POST /api/v1/transformation/transformations/stage1` - Execute all Stage 1 transformations
-- `POST /api/v1/transformation/transformations/stage2` - Execute all Stage 2 CDC transformations
-- `GET /api/v1/transformation/schemas` - Get all UDF schemas
 
-#### Model Phase (Coming Soon)
-- `POST /api/v1/model/erd` - Generate ERD
-- `POST /api/v1/model/hierarchies` - Model hierarchies
-- `POST /api/v1/model/star-schema` - Design star schema
+#### Transform Phase
+- `GET /api/v1/transform/status` - Get transform status
+- `GET /api/v1/transform/udfs` - List UDFs
+- `POST /api/v1/transform/udfs` - Create UDF
+- `PUT /api/v1/transform/udfs/{name}` - Update UDF
+- `POST /api/v1/transform/transformations/stage1` - Execute Stage 1
+- `POST /api/v1/transform/transformations/stage2` - Execute Stage 2 CDC
+- `POST /api/v1/transform/transformations/stage3` - Execute Stage 3 Gold Model
 
-#### Build Phase (Coming Soon)
-- `POST /api/v1/build/dag` - Generate DAG
-- `POST /api/v1/build/sql` - Generate SQL
-- `POST /api/v1/build/pipeline` - Create pipeline
+#### Model Phase
+- `GET /api/v1/model/status` - Get model status
+- `POST /api/v1/model/erd/analyze` - Analyze ERD relationships
+- `POST /api/v1/model/hierarchies/analyze` - Analyze hierarchies
+- `GET /api/v1/model/erd/metadata` - Get ERD metadata
+- `GET /api/v1/model/hierarchies/metadata` - Get hierarchy metadata
+- `PUT /api/v1/model/erd/edit` - Edit ERD relationships
+- `PUT /api/v1/model/hierarchies/edit` - Edit hierarchies
+- `POST /api/v1/model/hierarchies/create` - Create custom hierarchy
+- `POST /api/v1/model/erd/create` - Create custom ERD relationship
+
 
 ## 🧪 Testing
 
