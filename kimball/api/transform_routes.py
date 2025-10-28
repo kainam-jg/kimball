@@ -631,7 +631,7 @@ async def execute_transformation(transformation_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @transform_router.post("/transformations/execute/parallel")
-async def execute_transformations_parallel(transformation_ids: List[str]):
+async def execute_transformations_parallel(request: dict):
     """
     Execute multiple transformations in parallel.
     
@@ -639,7 +639,7 @@ async def execute_transformations_parallel(transformation_ids: List[str]):
     using the TransformEngine's parallel execution capability.
     
     Parameters:
-        - transformation_ids: List of transformation IDs to execute
+        - transformation_names: List of transformation names to execute
     
     Returns:
         Dict containing results for all transformations
@@ -647,8 +647,13 @@ async def execute_transformations_parallel(transformation_ids: List[str]):
     try:
         from ..core.transform_engine import TransformEngine
         
+        # Extract transformation names from request
+        transformation_names = request.get('transformation_names', [])
+        if not transformation_names:
+            raise HTTPException(status_code=400, detail="transformation_names is required")
+        
         engine = TransformEngine()
-        result = engine.execute_transformations_parallel(transformation_ids)
+        result = engine.execute_transformations_parallel(transformation_names)
         
         return result
         
