@@ -170,6 +170,115 @@ class TransformEngine:
                 "statements_executed": 0
             }
     
+    def _execute_transformation_with_separate_db(self, transformation_id: str) -> Dict[str, Any]:
+        """
+        Execute a single transformation with its own database manager instance.
+        
+        This method creates a separate DatabaseManager instance to avoid
+        concurrent query issues when running transformations in parallel.
+        
+        Args:
+            transformation_id: Unique identifier for the transformation
+        
+        Returns:
+            Dict containing execution results
+        """
+        try:
+            # Create a separate database manager for this thread
+            db_manager = DatabaseManager()
+            
+            # Get transformation statements
+            statements = self.get_transformation_statements(transformation_id)
+            
+            if not statements:
+                return {
+                    "status": "error",
+                    "message": f"No statements found for transformation {transformation_id}",
+                    "transformation_id": transformation_id,
+                    "statements_executed": 0
+                }
+            
+            logger.info(f"Starting transformation {transformation_id} with {len(statements)} statements")
+            
+            start_time = datetime.now()
+            execution_results = []
+            statements_executed = 0
+            statements_failed = 0
+            total_records_processed = 0
+            
+            # Execute statements sequentially
+            for statement in statements:
+                try:
+                    stmt_start_time = datetime.now()
+                    
+                    # Execute the SQL statement
+                    result = db_manager.execute_query_dict(statement['sql_statement'])
+                    
+                    stmt_execution_time = (datetime.now() - stmt_start_time).total_seconds()
+                    
+                    execution_results.append({
+                        "execution_sequence": statement['execution_sequence'],
+                        "statement_type": statement['statement_type'],
+                        "description": f"{statement['statement_type']} statement",
+                        "status": "success",
+                        "records_processed": len(result) if result else 0,
+                        "execution_time": stmt_execution_time,
+                        "sql_preview": statement['sql_statement'][:100] + "..." if len(statement['sql_statement']) > 100 else statement['sql_statement']
+                    })
+                    
+                    statements_executed += 1
+                    total_records_processed += len(result) if result else 0
+                    
+                    logger.info(f"Statement {statement['execution_sequence']} executed successfully: {statement['statement_type']}")
+                    
+                except Exception as e:
+                    logger.error(f"Error executing statement {statement['execution_sequence']}: {e}")
+                    statements_failed += 1
+                    
+                    execution_results.append({
+                        "execution_sequence": statement['execution_sequence'],
+                        "statement_type": statement['statement_type'],
+                        "description": f"{statement['statement_type']} statement",
+                        "status": "error",
+                        "error_message": str(e),
+                        "records_processed": 0,
+                        "execution_time": 0,
+                        "sql_preview": statement['sql_statement'][:100] + "..." if len(statement['sql_statement']) > 100 else statement['sql_statement']
+                    })
+            
+            total_execution_time = (datetime.now() - start_time).total_seconds()
+            
+            # Determine overall status
+            if statements_failed == 0:
+                status = "success"
+                message = f"Transformation {transformation_id} completed"
+            elif statements_executed > 0:
+                status = "partial_success"
+                message = f"Transformation {transformation_id} completed with {statements_failed} failed statements"
+            else:
+                status = "error"
+                message = f"Transformation {transformation_id} failed - no statements executed successfully"
+            
+            return {
+                "status": status,
+                "message": message,
+                "transformation_id": transformation_id,
+                "statements_executed": statements_executed,
+                "statements_failed": statements_failed,
+                "total_records_processed": total_records_processed,
+                "total_execution_time": total_execution_time,
+                "execution_results": execution_results
+            }
+            
+        except Exception as e:
+            logger.error(f"Error executing transformation {transformation_id}: {e}")
+            return {
+                "status": "error",
+                "message": f"Transformation {transformation_id} failed: {str(e)}",
+                "transformation_id": transformation_id,
+                "statements_executed": 0
+            }
+    
     def execute_transformations_parallel(self, transformation_ids: List[str]) -> Dict[str, Any]:
         """
         Execute multiple transformations in parallel.
@@ -183,9 +292,9 @@ class TransformEngine:
         try:
             start_time = datetime.now()
             
-            # Submit all transformations to thread pool
+            # Submit all transformations to thread pool with separate database managers
             future_to_id = {
-                self.executor.submit(self.execute_transformation, tid): tid 
+                self.executor.submit(self._execute_transformation_with_separate_db, tid): tid 
                 for tid in transformation_ids
             }
             
