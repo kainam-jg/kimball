@@ -91,7 +91,10 @@ class CalendarGenerator:
             # Generate the calendar dataframe
             df = generate_date_dataframe(start_date, end_date)
             
-            # Create the table in gold schema
+            # Drop existing table first to ensure clean generation
+            self._drop_calendar_table()
+            
+            # Create the table in silver schema
             self._create_calendar_table()
             
             # Insert the data
@@ -121,6 +124,15 @@ class CalendarGenerator:
                 "start_date": start_date,
                 "end_date": end_date
             }
+    
+    def _drop_calendar_table(self):
+        """Drop the calendar_stage1 table in silver schema."""
+        drop_table_sql = "DROP TABLE IF EXISTS silver.calendar_stage1"
+        
+        self.logger.info("Dropping silver.calendar_stage1 table")
+        success = self.db_manager.execute_command(drop_table_sql)
+        if not success:
+            raise Exception("Failed to drop calendar_stage1 table")
     
     def _create_calendar_table(self):
         """Create the calendar_stage1 table in silver schema."""
