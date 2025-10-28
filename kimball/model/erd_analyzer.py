@@ -15,6 +15,7 @@ import logging
 from datetime import datetime
 
 from ..core.database import DatabaseManager
+from ..core.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +35,15 @@ class ERDAnalyzer:
     def __init__(self):
         """Initialize ERD analyzer with database connection."""
         self.db_manager = DatabaseManager()
+        self.config = Config()
         self.stage1_tables = []
         self.table_metadata = {}
         self.erd_relationships = []
+        
+        # Load ignore fields configuration
+        config_data = self.config.get_config()
+        self.ignore_join_fields = config_data.get('model_settings', {}).get('ignore_join_fields', [])
+        logger.info(f"Loaded ignore join fields: {self.ignore_join_fields}")
         
     def discover_stage1_tables(self) -> List[str]:
         """
@@ -370,6 +377,11 @@ class ERDAnalyzer:
         # Find columns that appear in multiple tables
         for col_name, occurrences in column_info.items():
             if len(occurrences) > 1:
+                # Skip ignored fields
+                if col_name in self.ignore_join_fields:
+                    logger.debug(f"Skipping ignored field '{col_name}' for join relationships")
+                    continue
+                
                 # Check if types are compatible
                 for i, occ1 in enumerate(occurrences):
                     for j, occ2 in enumerate(occurrences[i+1:], i+1):
