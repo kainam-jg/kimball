@@ -123,20 +123,20 @@ async def get_model_status():
         except:
             pass
         
-        # Get Stage 2 table count
-        stage2_query = """
+        # Get Stage 1 table count
+        stage1_query = """
         SELECT COUNT(*) as count 
         FROM system.tables 
         WHERE database = 'silver' 
-        AND name LIKE '%_stage2'
+        AND name LIKE '%_stage1'
         """
-        stage2_result = db_manager.execute_query(stage2_query)
-        stage2_count = stage2_result[0]['count'] if stage2_result else 0
+        stage1_result = db_manager.execute_query_dict(stage1_query)
+        stage1_count = stage1_result[0]['count'] if stage1_result else 0
         
         return {
             "status": "active",
             "phase": "Model",
-            "stage2_tables": stage2_count,
+            "stage1_tables": stage1_count,
             "metadata_tables": {
                 "erd": erd_table_exists,
                 "hierarchies": hierarchy_table_exists

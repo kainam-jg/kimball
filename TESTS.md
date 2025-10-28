@@ -680,7 +680,7 @@ curl -X POST "http://localhost:8000/api/v1/model/erd/analyze" \
 curl -X GET "http://localhost:8000/api/v1/model/erd/metadata"
 
 # Get ERD metadata for specific table
-curl -X GET "http://localhost:8000/api/v1/model/erd/metadata?table_name=sales_transactions_stage2"
+curl -X GET "http://localhost:8000/api/v1/model/erd/metadata?table_name=daily_sales_stage1"
 ```
 
 #### **Get ERD Relationships**
@@ -707,7 +707,7 @@ curl -X POST "http://localhost:8000/api/v1/model/hierarchies/analyze" \
 curl -X GET "http://localhost:8000/api/v1/model/hierarchies/metadata"
 
 # Get hierarchy metadata for specific table
-curl -X GET "http://localhost:8000/api/v1/model/hierarchies/metadata?table_name=dealer_regions_stage2"
+curl -X GET "http://localhost:8000/api/v1/model/hierarchies/metadata?table_name=dealer_regions_stage1"
 ```
 
 #### **Get Hierarchy Levels**
@@ -716,7 +716,7 @@ curl -X GET "http://localhost:8000/api/v1/model/hierarchies/metadata?table_name=
 curl -X GET "http://localhost:8000/api/v1/model/hierarchies/levels"
 
 # Get hierarchy levels for specific table
-curl -X GET "http://localhost:8000/api/v1/model/hierarchies/levels?table_name=dealer_regions_stage2"
+curl -X GET "http://localhost:8000/api/v1/model/hierarchies/levels?table_name=dealer_regions_stage1"
 ```
 
 ### **Comprehensive Analysis**

@@ -3,10 +3,10 @@
 KIMBALL Model Phase - Hierarchy Analysis
 
 This module provides hierarchy analysis for the Model Phase.
-It analyzes dimensional hierarchies in Stage 2 silver tables and generates
+It analyzes dimensional hierarchies in Stage 1 silver tables and generates
 hierarchy metadata for OLAP modeling.
 
-Based on the archive kimball_hierarchy_analyzer.py with enhancements for Stage 2 data.
+Based on the archive kimball_hierarchy_analyzer.py with enhancements for Stage 1 data.
 """
 
 from typing import Dict, List, Any, Tuple, Optional
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 class HierarchyAnalyzer:
     """
-    Analyzes dimensional hierarchies for Stage 2 silver tables.
+    Analyzes dimensional hierarchies for Stage 1 silver tables.
     
     This class discovers:
     - ROOT nodes (lowest cardinality, highest level)
@@ -36,43 +36,43 @@ class HierarchyAnalyzer:
     def __init__(self):
         """Initialize hierarchy analyzer with database connection."""
         self.db_manager = DatabaseManager()
-        self.stage2_tables = []
+        self.stage1_tables = []
         self.dimension_columns = {}
         self.hierarchies = {}
         
-    def discover_stage2_tables(self) -> List[str]:
+    def discover_stage1_tables(self) -> List[str]:
         """
-        Discover all Stage 2 tables in the silver schema.
+        Discover all Stage 1 tables in the silver schema.
         
         Returns:
-            List[str]: List of Stage 2 table names
+            List[str]: List of Stage 1 table names
         """
         try:
             query = """
             SELECT name 
             FROM system.tables 
             WHERE database = 'silver' 
-            AND name LIKE '%_stage2'
+            AND name LIKE '%_stage1'
             ORDER BY name
             """
             
-            results = self.db_manager.execute_query(query)
-            self.stage2_tables = [row['name'] for row in results] if results else []
+            results = self.db_manager.execute_query_dict(query)
+            self.stage1_tables = [row['name'] for row in results] if results else []
             
-            logger.info(f"Discovered {len(self.stage2_tables)} Stage 2 tables")
-            return self.stage2_tables
+            logger.info(f"Discovered {len(self.stage1_tables)} Stage 1 tables")
+            return self.stage1_tables
             
         except Exception as e:
-            logger.error(f"Error discovering Stage 2 tables: {e}")
+            logger.error(f"Error discovering Stage 1 tables: {e}")
             return []
     
     def load_dimension_columns(self) -> None:
         """
-        Load dimension columns from Stage 2 tables for hierarchy analysis.
+        Load dimension columns from Stage 1 tables for hierarchy analysis.
         """
-        logger.info("Loading dimension columns from Stage 2 tables...")
+        logger.info("Loading dimension columns from Stage 1 tables...")
         
-        for table_name in self.stage2_tables:
+        for table_name in self.stage1_tables:
             try:
                 # Get dimension columns from metadata.discover
                 query = f"""
@@ -86,12 +86,12 @@ class HierarchyAnalyzer:
                     null_count,
                     sample_values
                 FROM metadata.discover
-                WHERE original_table_name = '{table_name.replace('_stage2', '')}'
+                WHERE original_table_name = '{table_name.replace('_stage1', '')}'
                 AND classification = 'dimension'
                 ORDER BY cardinality ASC
                 """
                 
-                results = self.db_manager.execute_query(query)
+                results = self.db_manager.execute_query_dict(query)
                 
                 for row in results:
                     col_key = f"{table_name}.{row['new_column_name']}"
@@ -416,13 +416,13 @@ class HierarchyAnalyzer:
     
     def generate_hierarchy_metadata(self) -> Dict[str, Any]:
         """
-        Generate comprehensive hierarchy metadata for all Stage 2 tables.
+        Generate comprehensive hierarchy metadata for all Stage 1 tables.
         
         Returns:
             Dict[str, Any]: Complete hierarchy metadata
         """
         # Discover and load dimension columns
-        self.discover_stage2_tables()
+        self.discover_stage1_tables()
         self.load_dimension_columns()
         
         # Build hierarchies
@@ -435,7 +435,7 @@ class HierarchyAnalyzer:
         hierarchy_metadata = {
             'schema_name': 'silver',
             'analysis_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'total_tables': len(self.stage2_tables),
+            'total_tables': len(self.stage1_tables),
             'total_dimension_columns': len(self.dimension_columns),
             'total_hierarchies': len(hierarchies),
             'total_cross_relationships': len(cross_relationships),

@@ -3,10 +3,10 @@
 KIMBALL Model Phase - ERD Analysis
 
 This module provides ERD (Entity Relationship Diagram) analysis for the Model Phase.
-It analyzes relationships between tables in the Stage 2 silver schema and generates
+It analyzes relationships between tables in the Stage 1 silver schema and generates
 ERD metadata for dimensional modeling.
 
-Based on the archive kimball_primary_key_analyzer.py with enhancements for Stage 2 data.
+Based on the archive kimball_primary_key_analyzer.py with enhancements for Stage 1 data.
 """
 
 from typing import Dict, List, Any, Tuple, Optional
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 class ERDAnalyzer:
     """
-    Analyzes Entity Relationship Diagrams for Stage 2 silver tables.
+    Analyzes Entity Relationship Diagrams for Stage 1 silver tables.
     
     This class discovers:
     - Primary key candidates
@@ -34,42 +34,42 @@ class ERDAnalyzer:
     def __init__(self):
         """Initialize ERD analyzer with database connection."""
         self.db_manager = DatabaseManager()
-        self.stage2_tables = []
+        self.stage1_tables = []
         self.table_metadata = {}
         self.erd_relationships = []
         
-    def discover_stage2_tables(self) -> List[str]:
+    def discover_stage1_tables(self) -> List[str]:
         """
-        Discover all Stage 2 tables in the silver schema.
+        Discover all Stage 1 tables in the silver schema.
         
         Returns:
-            List[str]: List of Stage 2 table names
+            List[str]: List of Stage 1 table names
         """
         try:
             query = """
             SELECT name 
             FROM system.tables 
             WHERE database = 'silver' 
-            AND name LIKE '%_stage2'
+            AND name LIKE '%_stage1'
             ORDER BY name
             """
             
-            results = self.db_manager.execute_query(query)
-            self.stage2_tables = [row['name'] for row in results] if results else []
+            results = self.db_manager.execute_query_dict(query)
+            self.stage1_tables = [row['name'] for row in results] if results else []
             
-            logger.info(f"Discovered {len(self.stage2_tables)} Stage 2 tables")
-            return self.stage2_tables
+            logger.info(f"Discovered {len(self.stage1_tables)} Stage 1 tables")
+            return self.stage1_tables
             
         except Exception as e:
-            logger.error(f"Error discovering Stage 2 tables: {e}")
+            logger.error(f"Error discovering Stage 1 tables: {e}")
             return []
     
     def analyze_table_metadata(self, table_name: str) -> Dict[str, Any]:
         """
-        Analyze metadata for a single Stage 2 table.
+        Analyze metadata for a single Stage 1 table.
         
         Args:
-            table_name (str): Name of the Stage 2 table
+            table_name (str): Name of the Stage 1 table
             
         Returns:
             Dict[str, Any]: Table metadata including columns and relationships
@@ -90,11 +90,11 @@ class ERDAnalyzer:
             ORDER BY position
             """
             
-            columns = self.db_manager.execute_query(structure_query)
+            columns = self.db_manager.execute_query_dict(structure_query)
             
             # Get row count
             count_query = f"SELECT COUNT(*) as row_count FROM silver.{table_name}"
-            count_result = self.db_manager.execute_query(count_query)
+            count_result = self.db_manager.execute_query_dict(count_query)
             row_count = count_result[0]['row_count'] if count_result else 0
             
             # Analyze each column
@@ -146,7 +146,7 @@ class ERDAnalyzer:
             FROM silver.{table_name}
             """
             
-            stats = self.db_manager.execute_query(cardinality_query)
+            stats = self.db_manager.execute_query_dict(cardinality_query)
             if stats:
                 cardinality = stats[0]['cardinality']
                 null_count = stats[0]['null_count']
@@ -166,7 +166,7 @@ class ERDAnalyzer:
             LIMIT 5
             """
             
-            samples = self.db_manager.execute_query(sample_query)
+            samples = self.db_manager.execute_query_dict(sample_query)
             sample_values = [row['sample_value'] for row in samples] if samples else []
             
             # Determine if it's a primary key candidate
@@ -338,7 +338,7 @@ class ERDAnalyzer:
     
     def find_join_relationships(self) -> List[Dict[str, Any]]:
         """
-        Find potential join relationships between Stage 2 tables.
+        Find potential join relationships between Stage 1 tables.
         
         Returns:
             List[Dict[str, Any]]: List of potential join relationships
@@ -485,15 +485,15 @@ class ERDAnalyzer:
     
     def generate_erd_metadata(self) -> Dict[str, Any]:
         """
-        Generate comprehensive ERD metadata for all Stage 2 tables.
+        Generate comprehensive ERD metadata for all Stage 1 tables.
         
         Returns:
             Dict[str, Any]: Complete ERD metadata
         """
-        # Discover and analyze all Stage 2 tables
-        self.discover_stage2_tables()
+        # Discover and analyze all Stage 1 tables
+        self.discover_stage1_tables()
         
-        for table_name in self.stage2_tables:
+        for table_name in self.stage1_tables:
             self.analyze_table_metadata(table_name)
         
         # Find join relationships
@@ -503,7 +503,7 @@ class ERDAnalyzer:
         erd_metadata = {
             'schema_name': 'silver',
             'analysis_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'total_tables': len(self.stage2_tables),
+            'total_tables': len(self.stage1_tables),
             'total_relationships': len(relationships),
             'tables': self.table_metadata,
             'relationships': relationships,
