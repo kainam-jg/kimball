@@ -163,6 +163,14 @@ async def analyze_erd(request: ERDAnalysisRequest):
     try:
         logger.info(f"Starting ERD analysis for schema: {request.schema_name}")
         
+        # Truncate ERD metadata table before analysis
+        db_manager = DatabaseManager()
+        try:
+            db_manager.execute_query("TRUNCATE TABLE metadata.erd")
+            logger.info("Truncated metadata.erd table")
+        except Exception as e:
+            logger.warning(f"Could not truncate metadata.erd table: {e}")
+        
         # Initialize ERD analyzer
         erd_analyzer = ERDAnalyzer()
         
@@ -211,6 +219,17 @@ async def analyze_hierarchies(request: HierarchyAnalysisRequest):
     """
     try:
         logger.info(f"Starting hierarchy analysis for schema: {request.schema_name}")
+        
+        # Truncate hierarchy metadata table before analysis
+        db_manager = DatabaseManager()
+        try:
+            success = db_manager.execute_command("TRUNCATE TABLE metadata.hierarchies")
+            if success:
+                logger.info("Truncated metadata.hierarchies table")
+            else:
+                logger.warning("Failed to truncate metadata.hierarchies table")
+        except Exception as e:
+            logger.warning(f"Could not truncate metadata.hierarchies table: {e}")
         
         # Initialize hierarchy analyzer
         hierarchy_analyzer = HierarchyAnalyzer()
