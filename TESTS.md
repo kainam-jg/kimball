@@ -387,109 +387,205 @@ curl -X POST "http://localhost:8000/api/v1/discover/learn/correction" \
 
 ## 🔄 **Transform Phase** ✅ **ACTIVE**
 
-### **Transform Management**
+### **Multi-Statement Transformations** ✅ **WORKING**
 
 #### **Get Transformation Status**
 ```bash
 curl -X GET "http://localhost:8000/api/v1/transform/status"
 ```
 
-#### **List All UDFs**
+#### **List All Transformations**
 ```bash
-curl -X GET "http://localhost:8000/api/v1/transform/udfs"
+curl -X GET "http://localhost:8000/api/v1/transform/transformations"
 ```
 
-#### **List UDFs with Filtering**
+#### **Get Specific Transformation**
 ```bash
-# Filter by stage
-curl -X GET "http://localhost:8000/api/v1/transform/udfs?stage=stage1"
-
-# Filter by schema
-curl -X GET "http://localhost:8000/api/v1/transform/udfs?schema=default"
-
-# Filter by both stage and schema
-curl -X GET "http://localhost:8000/api/v1/transform/udfs?stage=stage1&schema=default"
-
-# Limit results
-curl -X GET "http://localhost:8000/api/v1/transform/udfs?limit=10"
+curl -X GET "http://localhost:8000/api/v1/transform/transformations/daily_sales_stage1"
 ```
 
-#### **Get Specific UDF**
-```bash
-curl -X GET "http://localhost:8000/api/v1/transform/udfs/transform_daily_sales_to_silver"
-```
+### **Create Multi-Statement Transformations**
 
-#### **Get All UDF Schemas**
+#### **Create dealer_regions_stage1 Transformation** ✅ **WORKING**
 ```bash
-curl -X GET "http://localhost:8000/api/v1/transform/schemas"
-```
-
-### **UDF Operations**
-
-#### **Create New UDF**
-```bash
-curl -X POST "http://localhost:8000/api/v1/transform/udfs" \
+curl -X POST "http://localhost:8000/api/v1/transform/transformations" \
   -H "Content-Type: application/json" \
   -d '{
     "transformation_stage": "stage1",
-    "udf_name": "my_custom_udf",
-    "udf_number": 1,
-    "udf_logic": "INSERT INTO silver.my_table SELECT * FROM bronze.source_table",
-    "udf_schema_name": "default",
-    "dependencies": [],
+    "transformation_id": "dealer_regions_stage1",
+    "statements": [
+      {
+        "transformation_id": "dealer_regions_stage1",
+        "execution_sequence": 1,
+        "sql_statement": "DROP TABLE IF EXISTS silver.dealer_regions_stage1;",
+        "statement_type": "DROP",
+        "description": "Drop existing dealer_regions_stage1 table"
+      },
+      {
+        "transformation_id": "dealer_regions_stage1",
+        "execution_sequence": 2,
+        "sql_statement": "CREATE TABLE silver.dealer_regions_stage1 (region String, district String, country_name String, city_name String, dealer_name String, create_date Date) ENGINE = MergeTree() ORDER BY tuple();",
+        "statement_type": "CREATE",
+        "description": "Create dealer_regions_stage1 table with proper schema"
+      },
+      {
+        "transformation_id": "dealer_regions_stage1",
+        "execution_sequence": 3,
+        "sql_statement": "INSERT INTO silver.dealer_regions_stage1 SELECT trim(region) AS region, trim(district) AS district, trim(country_name) AS country_name, trim(city_name) AS city_name, trim(dealer_name) AS dealer_name, toDate(parseDateTimeBestEffortOrNull(create_date)) AS create_date FROM bronze.dealer_regions;",
+        "statement_type": "INSERT",
+        "description": "Insert transformed data from bronze to silver"
+      }
+    ],
+    "source_schema": "bronze",
+    "source_table": "dealer_regions",
+    "target_schema": "silver",
+    "target_table": "dealer_regions_stage1",
     "execution_frequency": "daily"
   }'
 ```
 
-#### **Update Existing UDF**
+#### **Create vehicles_stage1 Transformation** ✅ **WORKING**
 ```bash
-curl -X PUT "http://localhost:8000/api/v1/transform/udfs/transform_daily_sales_to_silver" \
+curl -X POST "http://localhost:8000/api/v1/transform/transformations" \
   -H "Content-Type: application/json" \
   -d '{
-    "udf_logic": "INSERT INTO silver.sales_transactions_stage1 SELECT toDateTime(create_date) as create_date, toFloat64(amount_sales) as amount_sales, dealer_name as dealer_name, toDate(sales_date) as sales_date, vehicle_model as vehicle_model FROM bronze.daily_sales WHERE create_date >= toDate(now()) - INTERVAL 2 DAY",
-    "execution_frequency": "hourly"
-  }'
-```
-
-#### **Create UDF Function in ClickHouse**
-```bash
-curl -X POST "http://localhost:8000/api/v1/transform/udfs/create" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "udf_name": "transform_daily_sales_to_silver",
     "transformation_stage": "stage1",
-    "create_if_not_exists": true
+    "transformation_id": "vehicles_stage1",
+    "statements": [
+      {
+        "transformation_id": "vehicles_stage1",
+        "execution_sequence": 1,
+        "sql_statement": "DROP TABLE IF EXISTS silver.vehicles_stage1;",
+        "statement_type": "DROP",
+        "description": "Drop existing vehicles_stage1 table"
+      },
+      {
+        "transformation_id": "vehicles_stage1",
+        "execution_sequence": 2,
+        "sql_statement": "CREATE TABLE silver.vehicles_stage1 (vehicle_class String, vehicle_type String, vehicle_model String, create_date Date) ENGINE = MergeTree() ORDER BY tuple();",
+        "statement_type": "CREATE",
+        "description": "Create vehicles_stage1 table with proper schema"
+      },
+      {
+        "transformation_id": "vehicles_stage1",
+        "execution_sequence": 3,
+        "sql_statement": "INSERT INTO silver.vehicles_stage1 SELECT trim(vehicle_class) AS vehicle_class, trim(vehicle_type) AS vehicle_type, trim(vehicle_model) AS vehicle_model, toDate(parseDateTimeBestEffortOrNull(create_date)) AS create_date FROM bronze.vehicles;",
+        "statement_type": "INSERT",
+        "description": "Insert transformed data from bronze to silver"
+      }
+    ],
+    "source_schema": "bronze",
+    "source_table": "vehicles",
+    "target_schema": "silver",
+    "target_table": "vehicles_stage1",
+    "execution_frequency": "daily"
   }'
 ```
 
-#### **Execute UDF**
+#### **Create daily_sales_stage1 Transformation** ✅ **WORKING**
 ```bash
-# Execute with dry run
-curl -X POST "http://localhost:8000/api/v1/transform/udfs/execute" \
+curl -X POST "http://localhost:8000/api/v1/transform/transformations" \
   -H "Content-Type: application/json" \
   -d '{
-    "udf_name": "transform_daily_sales_to_silver",
-    "dry_run": true
+    "transformation_stage": "stage1",
+    "transformation_id": "daily_sales_stage1",
+    "statements": [
+      {
+        "transformation_id": "daily_sales_stage1",
+        "execution_sequence": 1,
+        "sql_statement": "DROP TABLE IF EXISTS silver.daily_sales_stage1;",
+        "statement_type": "DROP",
+        "description": "Drop existing daily_sales_stage1 table"
+      },
+      {
+        "transformation_id": "daily_sales_stage1",
+        "execution_sequence": 2,
+        "sql_statement": "CREATE TABLE silver.daily_sales_stage1 (sales_amount Decimal(15, 2), dealer_name String, sales_date Date, vehicle_model String, create_date Date) ENGINE = MergeTree() PARTITION BY toStartOfYear(sales_date) ORDER BY (sales_date, dealer_name);",
+        "statement_type": "CREATE",
+        "description": "Create daily_sales_stage1 table with proper schema and partitioning"
+      },
+      {
+        "transformation_id": "daily_sales_stage1",
+        "execution_sequence": 3,
+        "sql_statement": "INSERT INTO silver.daily_sales_stage1 WITH replaceRegexpAll(amount_sales, \"[,$]\", \"\") AS am0, if(match(am0, \"^\\\\(.*\\\\)$\"), concat(\"-\", replaceRegexpAll(am0, \"[()]\", \"\")), am0) AS am_norm SELECT toDecimal64OrNull(am_norm, 2) AS sales_amount, trim(dealer_name) AS dealer_name, toDate(parseDateTimeBestEffortOrNull(sales_date)) AS sales_date, trim(vehicle_model) AS vehicle_model, toDate(parseDateTimeBestEffortOrNull(create_date)) AS create_date FROM bronze.daily_sales;",
+        "statement_type": "INSERT",
+        "description": "Insert transformed data with currency parsing and date conversion"
+      }
+    ],
+    "source_schema": "bronze",
+    "source_table": "daily_sales",
+    "target_schema": "silver",
+    "target_table": "daily_sales_stage1",
+    "execution_frequency": "daily"
   }'
+```
 
-# Execute for real
-curl -X POST "http://localhost:8000/api/v1/transform/udfs/execute" \
+### **Update Transformations with Upsert Logic** ✅ **WORKING**
+
+#### **Update daily_sales_stage1 with OPTIMIZE Statement**
+```bash
+curl -X PUT "http://localhost:8000/api/v1/transform/transformations/daily_sales_stage1" \
   -H "Content-Type: application/json" \
   -d '{
-    "udf_name": "transform_daily_sales_to_silver",
-    "dry_run": false,
-    "create_if_not_exists": true
+    "transformation_stage": "stage1",
+    "transformation_id": "daily_sales_stage1",
+    "statements": [
+      {
+        "transformation_id": "daily_sales_stage1",
+        "execution_sequence": 1,
+        "sql_statement": "DROP TABLE IF EXISTS silver.daily_sales_stage1;",
+        "statement_type": "DROP",
+        "description": "Drop existing daily_sales_stage1 table"
+      },
+      {
+        "transformation_id": "daily_sales_stage1",
+        "execution_sequence": 2,
+        "sql_statement": "CREATE TABLE silver.daily_sales_stage1 (sales_amount Decimal(15, 2), dealer_name String, sales_date Date, vehicle_model String, create_date Date) ENGINE = MergeTree() PARTITION BY toStartOfYear(sales_date) ORDER BY (sales_date, dealer_name);",
+        "statement_type": "CREATE",
+        "description": "Create daily_sales_stage1 table with proper schema and partitioning"
+      },
+      {
+        "transformation_id": "daily_sales_stage1",
+        "execution_sequence": 3,
+        "sql_statement": "INSERT INTO silver.daily_sales_stage1 WITH replaceRegexpAll(amount_sales, \"[,$]\", \"\") AS am0, if(match(am0, \"^\\\\(.*\\\\)$\"), concat(\"-\", replaceRegexpAll(am0, \"[()]\", \"\")), am0) AS am_norm SELECT toDecimal64OrNull(am_norm, 2) AS sales_amount, trim(dealer_name) AS dealer_name, toDate(parseDateTimeBestEffortOrNull(sales_date)) AS sales_date, trim(vehicle_model) AS vehicle_model, toDate(parseDateTimeBestEffortOrNull(create_date)) AS create_date FROM bronze.daily_sales;",
+        "statement_type": "INSERT",
+        "description": "Insert transformed data with currency parsing and date conversion"
+      },
+      {
+        "transformation_id": "daily_sales_stage1",
+        "execution_sequence": 4,
+        "sql_statement": "OPTIMIZE TABLE silver.daily_sales_stage1 FINAL;",
+        "statement_type": "OPTIMIZE",
+        "description": "Optimize table for better performance"
+      }
+    ],
+    "source_schema": "bronze",
+    "source_table": "daily_sales",
+    "target_schema": "silver",
+    "target_table": "daily_sales_stage1",
+    "execution_frequency": "daily"
   }'
 ```
 
-#### **Execute All Stage 1 Transformations**
+### **Execute Transformations**
+
+#### **Execute Single Transformation**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/transform/transformations/stage1"
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/daily_sales_stage1/execute"
 ```
 
-#### **Execute All Stage 2 CDC Transformations**
+#### **Execute Multiple Transformations in Parallel**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/transform/transformations/stage2"
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/parallel" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "transformation_names": ["dealer_regions_stage1", "vehicles_stage1", "daily_sales_stage1"]
+  }'
+```
+
+#### **Delete Transformation**
+```bash
+curl -X DELETE "http://localhost:8000/api/v1/transform/transformations/daily_sales_stage1"
 ```
 
 ---
@@ -826,51 +922,72 @@ curl -X PUT "http://localhost:8000/api/v1/discover/metadata/edit" \
 
 #### **3. Transform Phase**
 ```bash
-# Execute Stage 1 transformations
-curl -X POST "http://localhost:8000/api/v1/transform/transformations/stage1"
+# Create Stage1 transformations
+curl -X POST "http://localhost:8000/api/v1/transform/transformations" \
+  -H "Content-Type: application/json" \
+  -d '{"transformation_stage": "stage1", "transformation_id": "dealer_regions_stage1", ...}'
+
+# Execute transformations
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/daily_sales_stage1/execute"
 
 # Check transformation status
 curl -X GET "http://localhost:8000/api/v1/transform/status"
 
-# List UDFs
-curl -X GET "http://localhost:8000/api/v1/transform/udfs"
+# List transformations
+curl -X GET "http://localhost:8000/api/v1/transform/transformations"
 ```
 
-### **Custom UDF Testing Workflow**
+### **Multi-Statement Transformation Testing Workflow**
 
-#### **1. Create Custom UDF**
+#### **1. Create Stage1 Transformations**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/transform/udfs" \
+# Create dealer_regions_stage1
+curl -X POST "http://localhost:8000/api/v1/transform/transformations" \
   -H "Content-Type: application/json" \
   -d '{
-    "transformation_stage": "stage2",
-    "udf_name": "custom_aggregation_udf",
-    "udf_number": 1,
-    "udf_logic": "INSERT INTO gold.aggregated_sales SELECT dealer_name, SUM(amount_sales) as total_sales, COUNT(*) as transaction_count FROM silver.sales_transactions_stage1 GROUP BY dealer_name",
-    "udf_schema_name": "custom",
-    "dependencies": ["transform_daily_sales_to_silver"],
+    "transformation_stage": "stage1",
+    "transformation_id": "dealer_regions_stage1",
+    "statements": [
+      {"execution_sequence": 1, "sql_statement": "DROP TABLE IF EXISTS silver.dealer_regions_stage1;", "statement_type": "DROP"},
+      {"execution_sequence": 2, "sql_statement": "CREATE TABLE silver.dealer_regions_stage1 (...)", "statement_type": "CREATE"},
+      {"execution_sequence": 3, "sql_statement": "INSERT INTO silver.dealer_regions_stage1 SELECT ...", "statement_type": "INSERT"}
+    ],
+    "source_schema": "bronze",
+    "source_table": "dealer_regions",
+    "target_schema": "silver",
+    "target_table": "dealer_regions_stage1",
     "execution_frequency": "daily"
   }'
 ```
 
-#### **2. Create UDF Function in ClickHouse**
+#### **2. Execute Transformations**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/transform/udfs/create" \
+# Execute single transformation
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/daily_sales_stage1/execute"
+
+# Execute multiple transformations in parallel
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/parallel" \
   -H "Content-Type: application/json" \
   -d '{
-    "udf_name": "custom_aggregation_udf",
-    "transformation_stage": "stage2",
-    "create_if_not_exists": true
+    "transformation_names": ["dealer_regions_stage1", "vehicles_stage1", "daily_sales_stage1"]
   }'
 ```
 
-#### **3. Execute Custom UDF**
+#### **3. Update Transformations**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/transform/udfs/execute" \
+# Update transformation with additional statements (upsert logic)
+curl -X PUT "http://localhost:8000/api/v1/transform/transformations/daily_sales_stage1" \
   -H "Content-Type: application/json" \
   -d '{
-    "udf_name": "custom_aggregation_udf",
-    "dry_run": false
+    "transformation_stage": "stage1",
+    "transformation_id": "daily_sales_stage1",
+    "statements": [
+      {"execution_sequence": 1, "sql_statement": "DROP TABLE IF EXISTS silver.daily_sales_stage1;", "statement_type": "DROP"},
+      {"execution_sequence": 2, "sql_statement": "CREATE TABLE silver.daily_sales_stage1 (...)", "statement_type": "CREATE"},
+      {"execution_sequence": 3, "sql_statement": "INSERT INTO silver.daily_sales_stage1 SELECT ...", "statement_type": "INSERT"},
+      {"execution_sequence": 4, "sql_statement": "OPTIMIZE TABLE silver.daily_sales_stage1 FINAL;", "statement_type": "OPTIMIZE"}
+    ],
+    "execution_frequency": "daily"
   }'
 ```
 
@@ -883,14 +1000,9 @@ curl -X POST "http://localhost:8000/api/v1/acquire/datasources/test" \
   -d '{"name": "NonExistentSource"}'
 ```
 
-#### **Test Invalid UDF**
+#### **Test Invalid Transformation**
 ```bash
-curl -X POST "http://localhost:8000/api/v1/transform/udfs/execute" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "udf_name": "non_existent_udf",
-    "dry_run": false
-  }'
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/non_existent_transformation/execute"
 ```
 
 ---
@@ -963,6 +1075,15 @@ curl -X POST "http://localhost:8000/api/v1/transform/udfs/execute" \
 - **SQL Extraction**: Query result column detection and table creation
 - **Memory Management**: Streaming processing prevents memory accumulation
 
+### **Transform Phase Enhancements**
+- ✅ **Multi-Statement Transformations**: New API for creating complex transformations with DROP, CREATE, INSERT sequences
+- ✅ **Upsert Logic**: Update transformations with automatic deduplication using ReplacingMergeTree
+- ✅ **TransformEngine**: Sequential execution engine for multi-statement transformations
+- ✅ **Stage1 Transformations**: Complete dealer_regions, vehicles, and daily_sales transformations
+- ✅ **Advanced SQL**: Currency parsing, date conversion, and table optimization
+- ✅ **Parallel Execution**: Execute multiple transformations concurrently
+- ✅ **Schema Management**: transformation_schema_name for better organization
+
 ### **Bug Fixes**
 - Fixed `postgresql` vs `postgres` source type validation
 - Fixed indentation errors in acquire_routes.py
@@ -971,6 +1092,8 @@ curl -X POST "http://localhost:8000/api/v1/transform/udfs/execute" \
 - Fixed tuple vs dictionary access patterns in Discover phase
 - Fixed metadata.discover table upsert functionality
 - Fixed duplicate records in metadata storage
+- Fixed transformation_id assignment for multi-statement transformations
+- Fixed ReplacingMergeTree deduplication for transformation updates
 
 ---
 

@@ -1,30 +1,22 @@
-#!/usr/bin/env python3
 """
 Transform Phase API Routes
 
-This module handles UDF (User-Defined Function) management, creation, updating, 
-and execution for ELT transformations in the KIMBALL pipeline.
+This module provides FastAPI endpoints for the Transform phase of the KIMBALL API.
+It handles multi-statement transformations with sequential execution support.
 
-Key Features:
-- UDF lifecycle management (create, read, update, delete)
-- Schema-based UDF organization
-- ClickHouse UDF function creation and execution
-- Transform orchestration by stage
-- Real-time monitoring and metrics
-
-Architecture:
-- UDF metadata stored in metadata.transformation1 table
-- Multi-stage processing (Bronze → Silver → Gold)
-- Metadata-driven transformations with dependencies
-- Version control and upsert functionality
-- Gold layer dimensional model generation
+The Transform phase focuses on:
+- Multi-statement transformation management
+- Sequential SQL execution (solving ClickHouse limitations)
+- Stage orchestration (stage1, stage2, stage3, stage4)
+- Parallel execution of different transformations
+- SQL validation and error handling
 """
 
+import logging
+from datetime import datetime
+from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
-from datetime import datetime
-import logging
 
 from ..core.database import DatabaseManager
 
@@ -35,193 +27,652 @@ logger = logging.getLogger(__name__)
 transform_router = APIRouter(prefix="/api/v1/transform", tags=["Transform"])
 
 # Pydantic models for request/response validation
-class UDFRequest(BaseModel):
+class StatementRequest(BaseModel):
     """
-    Request model for creating/updating UDFs.
+    Request model for creating/updating individual SQL statements.
     
-    This model defines the structure for UDF creation requests, including
-    the new source/target tracking fields for Gold layer transformations.
+    This model defines the structure for individual SQL statement creation
+    within a multi-statement transformation.
     
     Attributes:
-        transformation_stage: Stage identifier (stage1, stage2, stage3)
-        udf_name: Unique name for the UDF
-        udf_number: Execution order number within the stage
-        udf_logic: SQL transformation logic
-        udf_schema_name: Schema where UDF is stored (default: 'default')
-        dependencies: List of dependent UDF names
-        execution_frequency: How often to run (daily, hourly, etc.)
-        source_schema: Source schema for Gold layer transformations (e.g., 'silver')
-        source_table: Source table for Gold layer transformations (e.g., 'dealers_stage2')
-        target_schema: Target schema for Gold layer transformations (e.g., 'gold')
-        target_table: Target table for Gold layer transformations (e.g., 'dealers_dim')
+        transformation_id: Unique identifier for the transformation
+        execution_sequence: Order of execution (1, 2, 3, etc.)
+        sql_statement: Single SQL statement to execute
+        statement_type: Type of statement (DROP, CREATE, INSERT, UPDATE, etc.)
+        description: Human-readable description of the statement
+    """
+    transformation_id: str
+    execution_sequence: int
+    sql_statement: str
+    statement_type: str
+    description: Optional[str] = None
+
+class TransformationRequest(BaseModel):
+    """
+    Request model for creating complete transformations with multiple statements.
+    
+    This model defines the structure for creating a complete transformation
+    with multiple SQL statements that execute in sequence.
+    
+    Attributes:
+        transformation_stage: Stage identifier (stage1, stage2, stage3, stage4)
+        transformation_id: Unique identifier for the transformation
+        statements: List of StatementRequest objects
+        source_schema: Source schema for transformations (optional)
+        source_table: Source table for transformations (optional)
+        target_schema: Target schema for transformations (optional)
+        target_table: Target table for transformations (optional)
+        execution_frequency: How often to run (e.g., 'daily', 'hourly')
     """
     transformation_stage: str
-    udf_name: str
-    udf_number: int
-    udf_logic: str
-    udf_schema_name: str = "default"
-    dependencies: List[str] = []
-    execution_frequency: str = "daily"
+    transformation_id: str
+    statements: List[StatementRequest]
     source_schema: Optional[str] = None
     source_table: Optional[str] = None
     target_schema: Optional[str] = None
     target_table: Optional[str] = None
+    execution_frequency: str = "daily"
 
-class UDFUpdateRequest(BaseModel):
-    """
-    Request model for updating existing UDFs.
-    
-    This model allows partial updates to existing UDFs. All fields are optional,
-    and only provided fields will be updated.
-    
-    Attributes:
-        udf_logic: Updated SQL transformation logic
-        udf_schema_name: Updated schema name
-        dependencies: Updated list of dependent UDF names
-        execution_frequency: Updated execution frequency
-    """
-    udf_logic: Optional[str] = None
-    udf_schema_name: Optional[str] = None
-    dependencies: Optional[List[str]] = None
-    execution_frequency: Optional[str] = None
-
-class UDFExecutionRequest(BaseModel):
-    """Request model for executing UDFs."""
-    udf_name: str
-    dry_run: bool = False
-    create_if_not_exists: bool = True
-
-class UDFCreationRequest(BaseModel):
-    """Request model for creating UDFs in ClickHouse."""
-    udf_name: str
-    transformation_stage: str
-    create_if_not_exists: bool = True
-
-class TransformationStatus(BaseModel):
-    """Response model for transformation status."""
+class SQLValidationRequest(BaseModel):
+    """Request model for SQL validation."""
+    sql: str
     stage: str
-    udf_name: str
-    status: str
-    records_processed: int
-    execution_time: float
-    error_message: Optional[str] = None
+
+# Helper Functions
+
+def validate_sql(sql: str, stage: str) -> Dict[str, Any]:
+    """
+    Validate SQL syntax and structure for ClickHouse compatibility.
+    
+    This function performs basic SQL validation to catch common syntax errors
+    and provide suggestions for ClickHouse compatibility.
+    
+    Args:
+        sql: SQL string to validate
+        stage: Transformation stage for context-specific validation
+    
+    Returns:
+        Dict containing validation results, errors, warnings, and suggestions
+    """
+    errors = []
+    warnings = []
+    suggestions = []
+    
+    # Basic syntax checks
+    sql_upper = sql.upper().strip()
+    
+    # Check for empty SQL
+    if not sql.strip():
+        errors.append("SQL cannot be empty")
+        return {
+            "is_valid": False,
+            "errors": errors,
+            "warnings": warnings,
+            "suggestions": suggestions
+        }
+    
+    # Check for semicolon termination
+    if not sql.strip().endswith(';'):
+        warnings.append("SQL should end with semicolon")
+        suggestions.append("Add semicolon at the end of the statement")
+    
+    # Check for common ClickHouse-specific issues
+    if "CREATE TABLE AS SELECT" in sql_upper:
+        errors.append("ClickHouse does not support CREATE TABLE AS SELECT")
+        suggestions.append("Use separate CREATE TABLE and INSERT statements")
+    
+    # Check for unsupported functions
+    unsupported_functions = ["CURRENT_TIMESTAMP", "NOW()", "SYSDATE"]
+    for func in unsupported_functions:
+        if func in sql_upper:
+            warnings.append(f"Function '{func}' may not work as expected in ClickHouse")
+            suggestions.append(f"Consider using ClickHouse date/time functions instead of '{func}'")
+    
+    # Stage-specific validation
+    if stage == "stage1":
+        if "CREATE TABLE" in sql_upper and "ENGINE" not in sql_upper:
+            warnings.append("Stage1 CREATE TABLE should specify ENGINE")
+            suggestions.append("Add ENGINE = MergeTree() or appropriate ClickHouse engine")
+    
+    return {
+        "is_valid": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings,
+        "suggestions": suggestions
+    }
 
 # API Endpoints
 
-@transform_router.get("/status")
-async def get_transform_status():
+@transform_router.post("/sql/validate")
+async def validate_sql_endpoint(request: SQLValidationRequest):
     """
-    Get the current status of the Transform Phase.
+    Validate SQL syntax and structure for ClickHouse.
     
-    This endpoint provides comprehensive status information about the Transform Phase,
-    including UDF counts by stage and schema, total counts, and phase information.
+    This endpoint validates SQL before creating transformations to catch syntax errors
+    and provide suggestions for ClickHouse compatibility.
+    
+    Parameters:
+        - sql: SQL string to validate
+        - stage: Transformation stage (stage1, stage2, stage3, stage4)
     
     Returns:
-        Dict containing:
-            - status: Current phase status (active/inactive)
-            - phase: Phase name (Transform)
-            - description: Phase description
-            - udf_counts_by_stage: Dictionary of UDF counts by transformation stage
-            - udf_counts_by_schema: Dictionary of UDF counts by schema
-            - total_udfs: Total number of UDFs across all stages
-            - total_schemas: Total number of schemas with UDFs
-    
-    Example Response:
-        {
-            "status": "active",
-            "phase": "Transform",
-            "description": "ELT transformation orchestration with ClickHouse UDFs",
-            "udf_counts_by_stage": {"stage1": 4, "stage2": 4, "stage3": 2},
-            "udf_counts_by_schema": {"default": 10},
-            "total_udfs": 10,
-            "total_schemas": 1
+        Dict containing validation results, errors, warnings, and suggestions
+    """
+    try:
+        validation_result = validate_sql(request.sql, request.stage)
+        return {
+            "status": "success",
+            "validation": validation_result
         }
+        
+    except Exception as e:
+        logger.error(f"Error validating SQL: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Multi-Statement Transformation APIs
+
+@transform_router.post("/transformations")
+async def create_transformation(request: TransformationRequest):
+    """
+    Create a new multi-statement transformation.
+    
+    This endpoint creates a complete transformation with multiple SQL statements
+    that will be executed in sequence by the TransformEngine.
+    
+    Parameters:
+        - transformation_stage: Stage identifier (stage1, stage2, stage3, stage4)
+        - transformation_id: Unique identifier for the transformation
+        - statements: List of StatementRequest objects with sequence numbers
+        - source_schema: Source schema for transformations (optional)
+        - source_table: Source table for transformations (optional)
+        - target_schema: Target schema for transformations (optional)
+        - target_table: Target table for transformations (optional)
+        - execution_frequency: How often to run (e.g., 'daily', 'hourly')
+    
+    Returns:
+        Dict containing creation results and statement details
     """
     try:
         db_manager = DatabaseManager()
         
-        # Get UDF count by stage
-        udf_count_query = """
-        SELECT 
-            transformation_stage,
-            COUNT(*) as udf_count
-        FROM metadata.transformation1
-        GROUP BY transformation_stage
-        ORDER BY transformation_stage
-        """
+        # Validate SQL statements
+        validation_results = []
+        for statement in request.statements:
+            validation = validate_sql(statement.sql_statement, request.transformation_stage)
+            validation_results.append({
+                "execution_sequence": statement.execution_sequence,
+                "statement_type": statement.statement_type,
+                "validation": validation
+            })
+            
+            if not validation["is_valid"]:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"SQL validation failed for statement {statement.execution_sequence}: {'; '.join(validation['errors'])}"
+                )
         
-        udf_counts = db_manager.execute_query(udf_count_query)
+        # Get next transformation_id (same for all statements in this transformation)
+        get_max_id_sql = "SELECT COALESCE(MAX(transformation_id), 0) as max_id FROM metadata.transformation1"
+        max_id_result = db_manager.execute_query_dict(get_max_id_sql)
+        next_transformation_id = (max_id_result[0]['max_id'] if max_id_result else 0) + 1
         
-        # Get schema count
-        schema_count_query = """
-        SELECT 
-            udf_schema_name,
-            COUNT(*) as udf_count
-        FROM metadata.transformation1
-        GROUP BY udf_schema_name
-        ORDER BY udf_schema_name
-        """
-        
-        schema_counts = db_manager.execute_query(schema_count_query)
+        # Create statements in the database
+        created_statements = []
+        for statement in request.statements:
+            # Generate new version for upsert
+            new_version = int(datetime.now().timestamp() * 1000000)
+            
+            # Escape SQL statement
+            escaped_sql = statement.sql_statement.replace("'", "''")
+            escaped_desc = (statement.description or f"{statement.statement_type} statement").replace("'", "''")
+            
+            insert_sql = f"""
+            INSERT INTO metadata.transformation1 (
+                transformation_stage,
+                transformation_id,
+                transformation_name,
+                transformation_schema_name,
+                dependencies,
+                execution_frequency,
+                source_schema,
+                source_table,
+                target_schema,
+                target_table,
+                execution_sequence,
+                sql_statement,
+                statement_type,
+                version
+            ) VALUES (
+                '{request.transformation_stage}',
+                {next_transformation_id},
+                '{request.transformation_id}',
+                'metadata',
+                '[]',
+                '{request.execution_frequency}',
+                '{request.source_schema or ''}',
+                '{request.source_table or ''}',
+                '{request.target_schema or ''}',
+                '{request.target_table or ''}',
+                {statement.execution_sequence},
+                '{escaped_sql}',
+                '{statement.statement_type}',
+                {new_version}
+            )
+            """
+            
+            db_manager.execute_query_dict(insert_sql)
+            
+            created_statements.append({
+                "execution_sequence": statement.execution_sequence,
+                "statement_type": statement.statement_type,
+                "description": statement.description,
+                "version": new_version
+            })
         
         return {
-            "status": "active",
-            "phase": "Transform",
-            "description": "ELT transformation orchestration with ClickHouse UDFs",
-            "udf_counts_by_stage": {row["transformation_stage"]: row["udf_count"] for row in udf_counts} if udf_counts else {},
-            "udf_counts_by_schema": {row["udf_schema_name"]: row["udf_count"] for row in schema_counts} if schema_counts else {},
-            "total_udfs": sum(row["udf_count"] for row in udf_counts) if udf_counts else 0,
-            "total_schemas": len(schema_counts) if schema_counts else 0
+            "status": "success",
+            "message": f"Transformation '{request.transformation_id}' created successfully",
+            "transformation_id": request.transformation_id,
+            "transformation_stage": request.transformation_stage,
+            "statements_created": len(created_statements),
+            "statements": created_statements,
+            "validation_results": validation_results
         }
         
     except Exception as e:
-        logger.error(f"Error getting transformation status: {e}")
+        logger.error(f"Error creating transformation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@transform_router.get("/udfs")
-async def get_udfs(
-    stage: Optional[str] = Query(None, description="Filter by transformation stage"),
-    schema: Optional[str] = Query(None, description="Filter by UDF schema name"),
-    limit: int = Query(100, description="Maximum number of UDFs to return")
-):
+@transform_router.put("/transformations/{transformation_name}")
+async def update_transformation(transformation_name: str, request: TransformationRequest):
     """
-    Get all UDFs or filter by stage/schema.
+    Update an existing transformation with upsert logic.
     
-    This endpoint retrieves UDFs from the metadata.transformation1 table with optional
-    filtering by transformation stage and schema. It now includes the new source/target
-    tracking fields for Gold layer transformations.
+    This endpoint updates an existing transformation by:
+    1. Upserting all provided statements (based on transformation_id + execution_sequence)
+    2. Keeping existing statements that are not in the request
+    3. Adding new execution sequences as needed
     
     Parameters:
-        - stage: Filter UDFs by transformation stage (e.g., 'stage1', 'stage2', 'stage3')
-        - schema: Filter UDFs by schema name (e.g., 'default', 'custom')
-        - limit: Maximum number of UDFs to return (default: 100)
+        - transformation_name: Name of the transformation to update
+        - request: TransformationRequest with updated statements
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # First, check if transformation exists and get its transformation_id
+        check_sql = f"""
+        SELECT DISTINCT transformation_id 
+        FROM metadata.transformation1 
+        WHERE transformation_name = '{transformation_name}'
+        """
+        existing_result = db_manager.execute_query_dict(check_sql)
+        
+        if not existing_result:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Transformation '{transformation_name}' not found"
+            )
+        
+        existing_transformation_id = existing_result[0]['transformation_id']
+        
+        # Validate SQL statements
+        validation_results = []
+        for statement in request.statements:
+            validation = validate_sql(statement.sql_statement, request.transformation_stage)
+            validation_results.append({
+                "execution_sequence": statement.execution_sequence,
+                "statement_type": statement.statement_type,
+                "validation": validation
+            })
+            
+            if not validation["is_valid"]:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"SQL validation failed for statement {statement.execution_sequence}: {'; '.join(validation['errors'])}"
+                )
+        
+        # Upsert each statement
+        upserted_statements = []
+        for statement in request.statements:
+            # Generate new version for upsert
+            new_version = int(datetime.now().timestamp() * 1000000)
+            
+            # Escape SQL statement
+            escaped_sql = statement.sql_statement.replace("'", "''")
+            escaped_desc = (statement.description or f"{statement.statement_type} statement").replace("'", "''")
+            
+            # Use INSERT with ReplacingMergeTree for upsert behavior
+            upsert_sql = f"""
+            INSERT INTO metadata.transformation1 (
+                transformation_stage,
+                transformation_id,
+                transformation_name,
+                transformation_schema_name,
+                dependencies,
+                execution_frequency,
+                source_schema,
+                source_table,
+                target_schema,
+                target_table,
+                execution_sequence,
+                sql_statement,
+                statement_type,
+                version
+            ) VALUES (
+                '{request.transformation_stage}',
+                {existing_transformation_id},
+                '{transformation_name}',
+                'metadata',
+                '[]',
+                '{request.execution_frequency}',
+                '{request.source_schema or ''}',
+                '{request.source_table or ''}',
+                '{request.target_schema or ''}',
+                '{request.target_table or ''}',
+                {statement.execution_sequence},
+                '{escaped_sql}',
+                '{statement.statement_type}',
+                {new_version}
+            )
+            """
+            
+            db_manager.execute_query_dict(upsert_sql)
+            
+            upserted_statements.append({
+                "execution_sequence": statement.execution_sequence,
+                "statement_type": statement.statement_type,
+                "description": statement.description,
+                "version": new_version
+            })
+        
+        # Get final count of statements for this transformation
+        count_sql = f"""
+        SELECT COUNT(*) as count 
+        FROM metadata.transformation1 
+        WHERE transformation_name = '{transformation_name}'
+        """
+        count_result = db_manager.execute_query_dict(count_sql)
+        total_statements = count_result[0]['count'] if count_result else 0
+        
+        return {
+            "status": "success",
+            "message": f"Transformation '{transformation_name}' updated successfully",
+            "transformation_id": existing_transformation_id,
+            "transformation_name": transformation_name,
+            "transformation_stage": request.transformation_stage,
+            "statements_upserted": len(upserted_statements),
+            "total_statements": total_statements,
+            "statements": upserted_statements,
+            "validation_results": validation_results
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating transformation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@transform_router.post("/statements")
+async def create_statement(request: StatementRequest):
+    """
+    Create a single SQL statement for an existing transformation.
+    
+    This endpoint adds a new SQL statement to an existing transformation
+    or creates a new transformation with a single statement.
+    
+    Parameters:
+        - transformation_id: Unique identifier for the transformation
+        - execution_sequence: Order of execution (1, 2, 3, etc.)
+        - sql_statement: Single SQL statement to execute
+        - statement_type: Type of statement (DROP, CREATE, INSERT, UPDATE, etc.)
+        - description: Human-readable description of the statement
     
     Returns:
-        Dict containing:
-            - status: Success status
-            - udfs: List of UDF objects with full metadata including source/target fields
-            - total_count: Total number of UDFs returned
-            - filtered_by_stage: Stage filter applied (if any)
-            - filtered_by_schema: Schema filter applied (if any)
-    
-    Example Response:
-        {
+        Dict containing creation results
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # Validate SQL statement
+        validation = validate_sql(request.sql_statement, "unknown")
+        if not validation["is_valid"]:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"SQL validation failed: {'; '.join(validation['errors'])}"
+            )
+        
+        # Generate new version for upsert
+        new_version = int(datetime.now().timestamp() * 1000000)
+        
+        # Escape SQL statement
+        escaped_sql = request.sql_statement.replace("'", "''")
+        escaped_desc = (request.description or f"{request.statement_type} statement").replace("'", "''")
+        
+        insert_sql = f"""
+        INSERT INTO metadata.transformation1 (
+            transformation_stage,
+            udf_name,
+            udf_number,
+            udf_logic,
+            transformation_schema_name,
+            dependencies,
+            execution_frequency,
+            source_schema,
+            source_table,
+            target_schema,
+            target_table,
+            transformation_id,
+            execution_sequence,
+            sql_statement,
+            statement_type,
+            version
+        ) VALUES (
+            'stage1',
+            '{request.transformation_id}',
+            1,
+            '{escaped_sql}',
+            'metadata',
+            '[]',
+            'daily',
+            '',
+            '',
+            '',
+            '',
+            '{request.transformation_id}',
+            {request.execution_sequence},
+            '{escaped_sql}',
+            '{request.statement_type}',
+            {new_version}
+        )
+        """
+        
+        db_manager.execute_query_dict(insert_sql)
+        
+        return {
             "status": "success",
-            "udfs": [
-                {
-                    "transformation_stage": "stage3",
-                    "udf_name": "create_dealers_dim",
-                    "source_schema": "silver",
-                    "source_table": "dealers_stage2",
-                    "target_schema": "gold",
-                    "target_table": "dealers_dim",
-                    ...
-                }
-            ],
-            "total_count": 1,
-            "filtered_by_stage": "stage3",
-            "filtered_by_schema": null
+            "message": f"Statement {request.execution_sequence} created for transformation '{request.transformation_id}'",
+            "transformation_id": request.transformation_id,
+            "execution_sequence": request.execution_sequence,
+            "statement_type": request.statement_type,
+            "version": new_version,
+            "validation": validation
         }
+        
+    except Exception as e:
+        logger.error(f"Error creating statement: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@transform_router.get("/transformations/{transformation_id}")
+async def get_transformation(transformation_id: str):
+    """
+    Get all statements for a specific transformation.
+    
+    This endpoint retrieves all SQL statements for a transformation
+    ordered by execution_sequence.
+    
+    Parameters:
+        - transformation_id: Unique identifier for the transformation
+    
+    Returns:
+        Dict containing all statements for the transformation
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        query = f"""
+        SELECT 
+            transformation_stage,
+            transformation_id,
+            transformation_name,
+            execution_sequence,
+            sql_statement,
+            statement_type,
+            source_schema,
+            source_table,
+            target_schema,
+            target_table,
+            execution_frequency,
+            created_at,
+            updated_at,
+            version
+        FROM metadata.transformation1
+        WHERE transformation_name = '{transformation_id}'
+        ORDER BY execution_sequence
+        """
+        
+        results = db_manager.execute_query_dict(query)
+        
+        if not results:
+            raise HTTPException(status_code=404, detail=f"Transformation '{transformation_id}' not found")
+        
+        return {
+            "status": "success",
+            "transformation_id": transformation_id,
+            "transformation_stage": results[0]["transformation_stage"],
+            "total_statements": len(results),
+            "statements": results
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting transformation '{transformation_id}': {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@transform_router.delete("/transformations/{transformation_id}")
+async def delete_transformation(transformation_id: str):
+    """
+    Delete an entire transformation and all its statements.
+    
+    This endpoint removes all SQL statements for a transformation
+    from the metadata.transformation1 table.
+    
+    Parameters:
+        - transformation_id: Unique identifier for the transformation
+    
+    Returns:
+        Dict containing deletion results
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # Check if transformation exists
+        existing_query = f"""
+        SELECT COUNT(*) as count FROM metadata.transformation1 
+        WHERE transformation_id = '{transformation_id}'
+        """
+        existing = db_manager.execute_query_dict(existing_query)
+        statement_count = existing[0]["count"] if existing else 0
+        
+        if statement_count == 0:
+            raise HTTPException(status_code=404, detail=f"Transformation '{transformation_id}' not found")
+        
+        # Delete all statements for the transformation
+        delete_sql = f"""
+        DELETE FROM metadata.transformation1
+        WHERE transformation_id = '{transformation_id}'
+        """
+        
+        db_manager.execute_query_dict(delete_sql)
+        
+        return {
+            "status": "success",
+            "message": f"Transformation '{transformation_id}' deleted successfully",
+            "statements_deleted": statement_count
+        }
+        
+    except Exception as e:
+        logger.error(f"Error deleting transformation '{transformation_id}': {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@transform_router.post("/transformations/{transformation_id}/execute")
+async def execute_transformation(transformation_id: str):
+    """
+    Execute a transformation using the TransformEngine.
+    
+    This endpoint executes all statements for a transformation
+    in sequence using the TransformEngine class.
+    
+    Parameters:
+        - transformation_id: Unique identifier for the transformation
+    
+    Returns:
+        Dict containing execution results and metrics
+    """
+    try:
+        from ..core.transform_engine import TransformEngine
+        
+        engine = TransformEngine()
+        result = engine.execute_transformation(transformation_id)
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error executing transformation '{transformation_id}': {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@transform_router.post("/transformations/execute/parallel")
+async def execute_transformations_parallel(transformation_ids: List[str]):
+    """
+    Execute multiple transformations in parallel.
+    
+    This endpoint executes multiple transformations simultaneously
+    using the TransformEngine's parallel execution capability.
+    
+    Parameters:
+        - transformation_ids: List of transformation IDs to execute
+    
+    Returns:
+        Dict containing results for all transformations
+    """
+    try:
+        from ..core.transform_engine import TransformEngine
+        
+        engine = TransformEngine()
+        result = engine.execute_transformations_parallel(transformation_ids)
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error executing transformations in parallel: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@transform_router.get("/transformations")
+async def get_transformations(
+    stage: Optional[str] = Query(None, description="Filter by transformation stage"),
+    limit: int = Query(100, description="Maximum number of transformations to return")
+):
+    """
+    Get all transformations or filter by stage.
+    
+    This endpoint retrieves all transformations from the metadata.transformation1 table
+    with optional filtering by transformation stage.
+    
+    Parameters:
+        - stage: Filter transformations by stage (e.g., 'stage1', 'stage2', 'stage3', 'stage4')
+        - limit: Maximum number of transformations to return (default: 100)
+    
+    Returns:
+        Dict containing transformations grouped by transformation_id
     """
     try:
         db_manager = DatabaseManager()
@@ -229,8 +680,6 @@ async def get_udfs(
         where_conditions = []
         if stage:
             where_conditions.append(f"transformation_stage = '{stage}'")
-        if schema:
-            where_conditions.append(f"udf_schema_name = '{schema}'")
         
         where_clause = ""
         if where_conditions:
@@ -239,695 +688,45 @@ async def get_udfs(
         query = f"""
         SELECT 
             transformation_stage,
-            udf_name,
-            udf_number,
-            udf_logic,
-            udf_schema_name,
-            dependencies,
-            execution_frequency,
+            transformation_id,
+            execution_sequence,
+            sql_statement,
+            statement_type,
             source_schema,
             source_table,
             target_schema,
             target_table,
+            execution_frequency,
             created_at,
             updated_at,
             version
         FROM metadata.transformation1
         {where_clause}
-        ORDER BY transformation_stage, udf_number
+        ORDER BY transformation_id, execution_sequence
         LIMIT {limit}
         """
         
-        results = db_manager.execute_query(query)
+        results = db_manager.execute_query_dict(query)
         
-        return {
-            "status": "success",
-            "udfs": results if results else [],
-            "total_count": len(results) if results else 0,
-            "filtered_by_stage": stage,
-            "filtered_by_schema": schema
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting UDFs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@transform_router.get("/udfs/{udf_name}")
-async def get_udf_by_name(udf_name: str):
-    """
-    Get a specific UDF by name.
-    
-    This endpoint retrieves a single UDF from the metadata.transformation1 table
-    by its unique name. It returns the latest version of the UDF including all
-    metadata fields, including the new source/target tracking fields.
-    
-    Parameters:
-        - udf_name: The unique name of the UDF to retrieve
-    
-    Returns:
-        Dict containing:
-            - status: Success status
-            - udf: Complete UDF object with all metadata fields
-    
-    Raises:
-        - HTTPException 404: If UDF with the given name is not found
-        - HTTPException 500: If database error occurs
-    
-    Example Response:
-        {
-            "status": "success",
-            "udf": {
-                "transformation_stage": "stage3",
-                "udf_name": "create_dealers_dim",
-                "udf_logic": "INSERT INTO gold.dealers_dim SELECT ...",
-                "source_schema": "silver",
-                "source_table": "dealers_stage2",
-                "target_schema": "gold",
-                "target_table": "dealers_dim",
-                "version": 1761576375390212,
-                ...
-            }
-        }
-    """
-    try:
-        db_manager = DatabaseManager()
-        
-        query = f"""
-        SELECT 
-            transformation_stage,
-            udf_name,
-            udf_number,
-            udf_logic,
-            udf_schema_name,
-            dependencies,
-            execution_frequency,
-            source_schema,
-            source_table,
-            target_schema,
-            target_table,
-            created_at,
-            updated_at,
-            version
-        FROM metadata.transformation1
-        WHERE udf_name = '{udf_name}'
-        ORDER BY version DESC
-        LIMIT 1
-        """
-        
-        results = db_manager.execute_query(query)
-        
-        if not results:
-            raise HTTPException(status_code=404, detail=f"UDF '{udf_name}' not found")
-        
-        return {
-            "status": "success",
-            "udf": results[0]
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting UDF {udf_name}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@transform_router.post("/udfs")
-async def create_udf(request: UDFRequest):
-    """
-    Create a new UDF with metadata.
-    
-    This endpoint creates a new UDF entry in the metadata.transformation1 table.
-    The UDF logic is stored as SQL text and can be executed later. This function
-    now supports the new source/target tracking fields for Gold layer transformations.
-    
-    Parameters:
-        - transformation_stage: Stage identifier (e.g., 'stage1', 'stage2', 'stage3')
-        - udf_name: Unique name for the UDF
-        - udf_number: Execution order number within the stage
-        - udf_logic: SQL transformation logic
-        - udf_schema_name: Schema where UDF is stored (default: 'default')
-        - dependencies: List of dependent UDF names
-        - execution_frequency: How often to run (e.g., 'daily', 'hourly')
-        - source_schema: Source schema for Gold layer transformations (optional)
-        - source_table: Source table for Gold layer transformations (optional)
-        - target_schema: Target schema for Gold layer transformations (optional)
-        - target_table: Target table for Gold layer transformations (optional)
-    
-    Returns:
-        - Success message with UDF details
-        - New version number for upsert functionality
-    
-    Example Request:
-        {
-            "transformation_stage": "stage3",
-            "udf_name": "create_dealers_dim",
-            "udf_number": 1,
-            "udf_logic": "INSERT INTO gold.dealers_dim SELECT ...",
-            "source_schema": "silver",
-            "source_table": "dealers_stage2",
-            "target_schema": "gold",
-            "target_table": "dealers_dim"
-        }
-    """
-    try:
-        db_manager = DatabaseManager()
-        
-        # Generate new version for upsert
-        new_version = int(datetime.now().timestamp() * 1000000)
-        
-        # Insert UDF metadata
-        escaped_logic = request.udf_logic.replace("'", "''")
-        insert_sql = f"""
-        INSERT INTO metadata.transformation1 (
-            transformation_stage,
-            udf_name,
-            udf_number,
-            udf_logic,
-            udf_schema_name,
-            dependencies,
-            execution_frequency,
-            source_schema,
-            source_table,
-            target_schema,
-            target_table,
-            version
-        ) VALUES (
-            '{request.transformation_stage}',
-            '{request.udf_name}',
-            {request.udf_number},
-            '{escaped_logic}',
-            '{request.udf_schema_name}',
-            {request.dependencies},
-            '{request.execution_frequency}',
-            '{request.source_schema or ''}',
-            '{request.source_table or ''}',
-            '{request.target_schema or ''}',
-            '{request.target_table or ''}',
-            {new_version}
-        )
-        """
-        
-        result = db_manager.execute_query(insert_sql)
-        
-        return {
-            "status": "success",
-            "message": f"UDF '{request.udf_name}' created successfully",
-            "udf_name": request.udf_name,
-            "transformation_stage": request.transformation_stage,
-            "udf_schema_name": request.udf_schema_name,
-            "version": new_version
-        }
-        
-    except Exception as e:
-        logger.error(f"Error creating UDF: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@transform_router.put("/udfs/{udf_name}")
-async def update_udf(udf_name: str, request: UDFUpdateRequest):
-    """
-    Update an existing UDF.
-    
-    This endpoint updates an existing UDF in the metadata.transformation1 table.
-    It uses upsert functionality with version control to maintain audit trails.
-    Only provided fields in the request will be updated.
-    
-    Parameters:
-        - udf_name: The unique name of the UDF to update
-        - request: UDFUpdateRequest containing fields to update
-    
-    Returns:
-        Dict containing:
-            - status: Success status
-            - message: Success message
-            - udf_name: Name of the updated UDF
-            - version: New version number
-    
-    Raises:
-        - HTTPException 404: If UDF with the given name is not found
-        - HTTPException 500: If database error occurs
-    
-    Example Request:
-        {
-            "udf_logic": "INSERT INTO gold.dealers_dim SELECT ...",
-            "execution_frequency": "hourly"
-        }
-    """
-    try:
-        db_manager = DatabaseManager()
-        
-        # Check if UDF exists
-        check_query = f"""
-        SELECT transformation_stage, udf_schema_name, version
-        FROM metadata.transformation1
-        WHERE udf_name = '{udf_name}'
-        ORDER BY version DESC
-        LIMIT 1
-        """
-        
-        existing = db_manager.execute_query(check_query)
-        if not existing:
-            raise HTTPException(status_code=404, detail=f"UDF '{udf_name}' not found")
-        
-        existing_record = existing[0]
-        current_version = existing_record["version"]
-        new_version = int(datetime.now().timestamp() * 1000000)
-        
-        # Build update fields
-        update_fields = []
-        if request.udf_logic is not None:
-            escaped_logic = request.udf_logic.replace("'", "''")
-            update_fields.append(f"udf_logic = '{escaped_logic}'")
-        if request.udf_schema_name is not None:
-            update_fields.append(f"udf_schema_name = '{request.udf_schema_name}'")
-        if request.dependencies is not None:
-            update_fields.append(f"dependencies = {request.dependencies}")
-        if request.execution_frequency is not None:
-            update_fields.append(f"execution_frequency = '{request.execution_frequency}'")
-        
-        if not update_fields:
-            raise HTTPException(status_code=400, detail="No fields provided for update")
-        
-        # Insert updated record (upsert)
-        insert_sql = f"""
-        INSERT INTO metadata.transformation1 (
-            transformation_stage,
-            udf_name,
-            udf_number,
-            udf_logic,
-            udf_schema_name,
-            dependencies,
-            execution_frequency,
-            version
-        )
-        SELECT 
-            transformation_stage,
-            udf_name,
-            udf_number,
-            {update_fields[0].split(' = ')[1] if 'udf_logic' in update_fields[0] else 'udf_logic'},
-            {update_fields[1].split(' = ')[1] if 'udf_schema_name' in update_fields[1] else 'udf_schema_name'},
-            {update_fields[2].split(' = ')[1] if 'dependencies' in update_fields[2] else 'dependencies'},
-            {update_fields[3].split(' = ')[1] if 'execution_frequency' in update_fields[3] else 'execution_frequency'},
-            {new_version}
-        FROM metadata.transformation1
-        WHERE udf_name = '{udf_name}' AND version = {current_version}
-        """
-        
-        result = db_manager.execute_query(insert_sql)
-        
-        return {
-            "status": "success",
-            "message": f"UDF '{udf_name}' updated successfully",
-            "udf_name": udf_name,
-            "updated_fields": [field.split(' = ')[0] for field in update_fields],
-            "new_version": new_version
-        }
-        
-    except Exception as e:
-        logger.error(f"Error updating UDF {udf_name}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@transform_router.post("/udfs/create")
-async def create_udf_in_clickhouse(request: UDFCreationRequest):
-    """
-    Create the actual UDF function in ClickHouse.
-    
-    This endpoint creates the actual UDF function in ClickHouse using the stored SQL logic.
-    It retrieves the UDF metadata and creates a ClickHouse function that can be executed.
-    
-    Parameters:
-        - udf_name: Name of the UDF to create
-        - transformation_stage: Stage identifier
-        - create_if_not_exists: Whether to create if function doesn't exist
-    
-    Returns:
-        - Success message with UDF creation details
-        - SQL statement used for creation
-    """
-    try:
-        db_manager = DatabaseManager()
-        
-        # Get UDF metadata
-        udf_query = f"""
-        SELECT 
-            udf_logic,
-            udf_schema_name,
-            transformation_stage
-        FROM metadata.transformation1
-        WHERE udf_name = '{request.udf_name}'
-        ORDER BY version DESC
-        LIMIT 1
-        """
-        
-        udf_results = db_manager.execute_query(udf_query)
-        if not udf_results:
-            raise HTTPException(status_code=404, detail=f"UDF '{request.udf_name}' not found in metadata")
-        
-        udf_data = udf_results[0]
-        udf_logic = udf_data["udf_logic"]
-        schema_name = udf_data["udf_schema_name"]
-        stage = udf_data["transformation_stage"]
-        
-        # Create UDF function in ClickHouse
-        create_udf_sql = f"""
-        CREATE OR REPLACE FUNCTION {schema_name}.{request.udf_name}()
-        AS $$
-        {udf_logic}
-        $$
-        """
-        
-        if request.create_if_not_exists:
-            create_udf_sql = create_udf_sql.replace("CREATE OR REPLACE", "CREATE")
-        
-        result = db_manager.execute_query(create_udf_sql)
-        
-        return {
-            "status": "success",
-            "message": f"UDF '{request.udf_name}' created in ClickHouse schema '{schema_name}'",
-            "udf_name": request.udf_name,
-            "schema_name": schema_name,
-            "transformation_stage": stage,
-            "sql": create_udf_sql
-        }
-        
-    except Exception as e:
-        logger.error(f"Error creating UDF in ClickHouse: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@transform_router.post("/udfs/execute")
-async def execute_udf(request: UDFExecutionRequest):
-    """Execute a UDF."""
-    try:
-        db_manager = DatabaseManager()
-        
-        # Get UDF logic
-        udf_query = f"""
-        SELECT udf_logic, transformation_stage, udf_schema_name
-        FROM metadata.transformation1
-        WHERE udf_name = '{request.udf_name}'
-        ORDER BY version DESC
-        LIMIT 1
-        """
-        
-        udf_results = db_manager.execute_query(udf_query)
-        if not udf_results:
-            if request.create_if_not_exists:
-                # Try to create the UDF first
-                create_request = UDFCreationRequest(
-                    udf_name=request.udf_name,
-                    transformation_stage="unknown",
-                    create_if_not_exists=True
-                )
-                await create_udf_in_clickhouse(create_request)
-                # Re-query after creation
-                udf_results = db_manager.execute_query(udf_query)
-                if not udf_results:
-                    raise HTTPException(status_code=404, detail=f"UDF '{request.udf_name}' not found")
-            else:
-                raise HTTPException(status_code=404, detail=f"UDF '{request.udf_name}' not found")
-        
-        udf_logic = udf_results[0]["udf_logic"]
-        stage = udf_results[0]["transformation_stage"]
-        schema = udf_results[0]["udf_schema_name"]
-        
-        if request.dry_run:
-            return {
-                "status": "dry_run",
-                "message": f"Dry run for UDF '{request.udf_name}'",
-                "udf_logic": udf_logic,
-                "transformation_stage": stage,
-                "schema_name": schema
-            }
-        
-        # Execute UDF
-        start_time = datetime.now()
-        result = db_manager.execute_query(udf_logic)
-        execution_time = (datetime.now() - start_time).total_seconds()
-        
-        return {
-            "status": "success",
-            "message": f"UDF '{request.udf_name}' executed successfully",
-            "udf_name": request.udf_name,
-            "transformation_stage": stage,
-            "schema_name": schema,
-            "execution_time": execution_time,
-            "result": result
-        }
-        
-    except Exception as e:
-        logger.error(f"Error executing UDF: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@transform_router.post("/transformations/stage1")
-async def execute_stage1_transformations():
-    """
-    Execute all Stage 1 transformations (Bronze to Silver).
-    
-    This endpoint executes all UDFs in the 'stage1' transformation stage.
-    Stage 1 transformations convert raw bronze layer data to cleaned silver layer data,
-    including data type conversions, column renaming, and basic data cleaning.
-    
-    Process:
-    1. Retrieves all Stage 1 UDFs from metadata.transformation1
-    2. Executes UDFs in order by udf_number
-    3. Processes each UDF's SQL logic
-    4. Returns detailed execution results
-    
-    Returns:
-        Dict containing:
-            - status: Success status
-            - message: Execution summary message
-            - transformations_executed: Number of UDFs executed
-            - total_records_processed: Total records processed across all UDFs
-            - results: List of detailed results for each UDF
-    
-    Example Response:
-        {
-            "status": "success",
-            "message": "Stage 1 transformations completed",
-            "transformations_executed": 4,
-            "total_records_processed": 1500000,
-            "results": [
-                {
-                    "udf_name": "transform_daily_sales_to_silver",
-                    "status": "success",
-                    "records_processed": 500000,
-                    "execution_time": 2.5
+        # Group results by transformation_id
+        transformations = {}
+        for row in results:
+            trans_id = row["transformation_id"]
+            if trans_id not in transformations:
+                transformations[trans_id] = {
+                    "transformation_id": trans_id,
+                    "transformation_stage": row["transformation_stage"],
+                    "statements": []
                 }
-            ]
-        }
-    """
-    try:
-        db_manager = DatabaseManager()
-        
-        # Get all Stage 1 UDFs
-        stage1_query = """
-        SELECT udf_name, udf_logic, udf_schema_name
-        FROM metadata.transformation1
-        WHERE transformation_stage = 'stage1'
-        ORDER BY udf_number
-        """
-        
-        udfs = db_manager.execute_query(stage1_query)
-        if not udfs:
-            return {
-                "status": "success",
-                "message": "No Stage 1 UDFs found",
-                "transformations_executed": 0
-            }
-        
-        results = []
-        total_records = 0
-        
-        for udf in udfs:
-            udf_name = udf["udf_name"]
-            udf_logic = udf["udf_logic"]
-            schema_name = udf["udf_schema_name"]
-            
-            try:
-                start_time = datetime.now()
-                result = db_manager.execute_query(udf_logic)
-                execution_time = (datetime.now() - start_time).total_seconds()
-                
-                # Try to get record count from result
-                records_processed = 0
-                if result and isinstance(result, list) and len(result) > 0:
-                    if isinstance(result[0], dict) and "written_rows" in result[0]:
-                        records_processed = result[0]["written_rows"]
-                
-                results.append({
-                    "udf_name": udf_name,
-                    "schema_name": schema_name,
-                    "status": "success",
-                    "records_processed": records_processed,
-                    "execution_time": execution_time
-                })
-                
-                total_records += records_processed
-                
-            except Exception as e:
-                results.append({
-                    "udf_name": udf_name,
-                    "schema_name": schema_name,
-                    "status": "error",
-                    "error_message": str(e),
-                    "records_processed": 0,
-                    "execution_time": 0
-                })
+            transformations[trans_id]["statements"].append(row)
         
         return {
             "status": "success",
-            "message": f"Stage 1 transformations completed",
-            "transformations_executed": len(results),
-            "total_records_processed": total_records,
-            "results": results
+            "transformations": list(transformations.values()),
+            "total_transformations": len(transformations),
+            "filtered_by_stage": stage
         }
         
     except Exception as e:
-        logger.error(f"Error executing Stage 1 transformations: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@transform_router.post("/transformations/stage2")
-async def execute_stage2_transformations():
-    """
-    Execute all Stage 2 transformations (Silver Stage1 to Silver Stage2 CDC).
-    
-    This endpoint executes all UDFs in the 'stage2' transformation stage.
-    Stage 2 implements CDC (Change Data Capture) to maintain current data in the silver layer,
-    creating _stage2 suffixed tables with the most recent version of each record.
-    
-    CDC Process:
-    1. Creates Stage 2 tables with MergeTree engine (no deduplication)
-    2. Drops existing Stage 2 tables to ensure clean data
-    3. Inserts all records from Stage 1 to Stage 2
-    4. Maintains data freshness and handles updates
-    
-    Key Features:
-    - Handles multi-statement SQL by splitting on semicolons
-    - Executes each statement separately (ClickHouse limitation)
-    - Provides detailed execution results and error handling
-    - Maintains audit trails and execution metrics
-    
-    Returns:
-        Dict containing:
-            - status: Success status
-            - message: Execution summary message
-            - transformations_executed: Number of UDFs executed
-            - total_records_processed: Total records processed across all UDFs
-            - results: List of detailed results for each UDF
-    
-    Example Response:
-        {
-            "status": "success",
-            "message": "Stage 2 CDC transformations completed",
-            "transformations_executed": 4,
-            "total_records_processed": 1500000,
-            "results": [
-                {
-                    "udf_name": "transform_daily_sales_stage2_cdc",
-                    "status": "success",
-                    "records_processed": 500000,
-                    "execution_time": 1.8
-                }
-            ]
-        }
-    """
-    try:
-        db_manager = DatabaseManager()
-        
-        # Get all Stage 2 UDFs
-        stage2_query = """
-        SELECT udf_name, udf_logic, udf_schema_name
-        FROM metadata.transformation1
-        WHERE transformation_stage = 'stage2'
-        ORDER BY udf_number
-        """
-        
-        udfs = db_manager.execute_query(stage2_query)
-        if not udfs:
-            return {
-                "status": "success",
-                "message": "No Stage 2 UDFs found",
-                "transformations_executed": 0
-            }
-        
-        results = []
-        total_records = 0
-        
-        for udf in udfs:
-            udf_name = udf["udf_name"]
-            udf_logic = udf["udf_logic"]
-            schema_name = udf["udf_schema_name"]
-            
-            try:
-                start_time = datetime.now()
-                
-                # Split multi-statement SQL and execute each statement separately
-                statements = [stmt.strip() for stmt in udf_logic.split(';') if stmt.strip()]
-                
-                records_processed = 0
-                for statement in statements:
-                    if statement:  # Skip empty statements
-                        result = db_manager.execute_query(statement)
-                        # Try to get record count from result
-                        if result and isinstance(result, list) and len(result) > 0:
-                            if isinstance(result[0], dict) and "written_rows" in result[0]:
-                                records_processed += result[0]["written_rows"]
-                
-                execution_time = (datetime.now() - start_time).total_seconds()
-                
-                results.append({
-                    "udf_name": udf_name,
-                    "schema_name": schema_name,
-                    "status": "success",
-                    "records_processed": records_processed,
-                    "execution_time": execution_time
-                })
-                
-                total_records += records_processed
-                
-            except Exception as e:
-                results.append({
-                    "udf_name": udf_name,
-                    "schema_name": schema_name,
-                    "status": "error",
-                    "error_message": str(e),
-                    "records_processed": 0,
-                    "execution_time": 0
-                })
-        
-        return {
-            "status": "success",
-            "message": f"Stage 2 CDC transformations completed",
-            "transformations_executed": len(results),
-            "total_records_processed": total_records,
-            "results": results
-        }
-        
-    except Exception as e:
-        logger.error(f"Error executing Stage 2 transformations: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@transform_router.get("/schemas")
-async def get_udf_schemas():
-    """Get all UDF schemas and their UDF counts."""
-    try:
-        db_manager = DatabaseManager()
-        
-        query = """
-        SELECT 
-            udf_schema_name,
-            COUNT(*) as udf_count,
-            COUNT(DISTINCT transformation_stage) as stage_count
-        FROM metadata.transformation1
-        GROUP BY udf_schema_name
-        ORDER BY udf_schema_name
-        """
-        
-        results = db_manager.execute_query(query)
-        
-        return {
-            "status": "success",
-            "schemas": results if results else [],
-            "total_schemas": len(results) if results else 0
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting UDF schemas: {e}")
+        logger.error(f"Error getting transformations: {e}")
         raise HTTPException(status_code=500, detail=str(e))

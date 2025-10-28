@@ -39,15 +39,14 @@ KIMBALL follows a four-phase approach:
 - **Primary key detection** and foreign key mapping
 
 ### 3. **Transform Phase** ✅ **COMPLETE**
-- **ELT Architecture**: Extract, Load, Transform using ClickHouse UDFs
-- **Transform Orchestration**: Automated UDF execution with dependency management
-- **Delta Lake Framework**: Standardized change data capture and versioning
-- **Metadata-Driven Transformations**: UDF logic stored in `metadata.transformation1` table
-- **Multi-Stage Processing**: Bronze → Silver → Gold with stage-specific transformations
-- **Stage 1 Transformations**: Bronze to Silver data type conversion and cleaning
-- **Stage 2 CDC**: Change Data Capture for Silver layer current data
-- **Stage 3 Dimensional Model**: Silver to Gold star schema generation
-- **Gold Layer Architecture**: Dimensional star schema with `_dim` and `_fact` suffixes
+- **Multi-Statement Transformations**: Advanced transformation system with DROP, CREATE, INSERT, OPTIMIZE sequences
+- **Upsert Logic**: Update transformations with automatic deduplication using ReplacingMergeTree
+- **TransformEngine**: Sequential execution engine for multi-statement transformations
+- **Stage1 Transformations**: Complete bronze to silver transformations with data type conversion
+- **Advanced SQL Processing**: Currency parsing, date conversion, and table optimization
+- **Parallel Execution**: Execute multiple transformations concurrently for better performance
+- **Schema Management**: transformation_schema_name for better organization
+- **Metadata-Driven**: Uses Discover phase metadata for intelligent transformations
 - **Rollback Capabilities**: Transaction-safe transformations with rollback support
 - **Monitoring & Logging**: Comprehensive transformation monitoring and audit trails
 
@@ -352,17 +351,24 @@ Bronze Layer (Raw Data) → Silver Layer (Cleaned/Transformed) → Gold Layer (B
 ```sql
 -- Transformation metadata table
 CREATE TABLE metadata.transformation1 (
-    transformation_stage String,      -- stage1, stage2, stage3, etc.
-    udf_name String,                   -- Name of the UDF function
-    udf_number UInt32,                 -- Execution order number
-    udf_logic String,                  -- SQL transformation logic
-    dependencies Array(String),        -- Dependent UDFs
-    execution_frequency String,        -- How often to run (daily, hourly, etc.)
+    transformation_stage String,           -- stage1, stage2, stage3, etc.
+    transformation_id UInt32,              -- Unique integer ID for each transformation
+    transformation_name String,            -- Human-readable transformation name
+    transformation_schema_name String,     -- Schema where transformation is stored
+    dependencies Array(String),            -- Dependent transformations
+    execution_frequency String,            -- How often to run (daily, hourly, etc.)
+    source_schema String,                  -- Source schema name
+    source_table String,                   -- Source table name
+    target_schema String,                  -- Target schema name
+    target_table String,                   -- Target table name
+    execution_sequence UInt32,             -- Order of execution within transformation
+    sql_statement String,                  -- The actual SQL statement
+    statement_type String,                 -- Type of statement (DROP, CREATE, INSERT, OPTIMIZE)
     created_at DateTime DEFAULT now(),
     updated_at DateTime DEFAULT now(),
     version UInt64 DEFAULT 1
 ) ENGINE = ReplacingMergeTree(version)
-ORDER BY (transformation_stage, udf_number)
+ORDER BY (transformation_id, execution_sequence)
 ```
 
 ## 🔄 Stream-Based Data Processing Architecture
@@ -615,12 +621,13 @@ Once the FastAPI backend is running, visit:
 
 #### Transform Phase
 - `GET /api/v1/transform/status` - Get transform status
-- `GET /api/v1/transform/udfs` - List UDFs
-- `POST /api/v1/transform/udfs` - Create UDF
-- `PUT /api/v1/transform/udfs/{name}` - Update UDF
-- `POST /api/v1/transform/transformations/stage1` - Execute Stage 1
-- `POST /api/v1/transform/transformations/stage2` - Execute Stage 2 CDC
-- `POST /api/v1/transform/transformations/stage3` - Execute Stage 3 Gold Model
+- `GET /api/v1/transform/transformations` - List all transformations
+- `POST /api/v1/transform/transformations` - Create multi-statement transformation
+- `PUT /api/v1/transform/transformations/{name}` - Update transformation with upsert logic
+- `GET /api/v1/transform/transformations/{name}` - Get specific transformation
+- `POST /api/v1/transform/transformations/{name}/execute` - Execute single transformation
+- `POST /api/v1/transform/transformations/execute/parallel` - Execute multiple transformations in parallel
+- `DELETE /api/v1/transform/transformations/{name}` - Delete transformation
 
 #### Model Phase
 - `GET /api/v1/model/status` - Get model status
