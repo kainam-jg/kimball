@@ -63,9 +63,6 @@ setup(
             "sphinx-rtd-theme>=1.3.0",
             "myst-parser>=2.0.0",
         ],
-        "streamlit": [
-            "streamlit>=1.28.0",
-        ],
     },
     entry_points={
         "console_scripts": [
@@ -90,7 +87,6 @@ setup(
         "olap",
         "clickhouse",
         "fastapi",
-        "streamlit",
     ],
     license="MIT",
     zip_safe=False,

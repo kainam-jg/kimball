@@ -18,7 +18,7 @@ KIMBALL follows a four-phase approach:
 - **Universal chunking framework** for handling datasets of any size (KB to TB)
 - **Stream-based processing** for memory-efficient file handling (CSV, Excel, Parquet)
 - **Connection testing** and validation for all source types
-- **Data source CRUD operations** via API and Streamlit UI
+- **Data source CRUD operations** via API
 - **Parallel processing** with intelligent worker scaling
 - **Unicode handling** and character encoding cleanup
 - **Performance optimization** with 10K record batches (10x improvement)
@@ -463,15 +463,7 @@ start_server.bat
 uvicorn kimball.api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-5. **Launch the Streamlit frontend** (for testing)
-```bash
-# Windows
-cd frontend
-start_streamlit.bat
-
-# Or manually
-streamlit run streamlit_app.py --server.port 8501
-```
+5. **Test the API endpoints** using curl commands or Postman
 
 ## 📁 Project Structure
 
@@ -509,8 +501,6 @@ kimball/
 │       ├── config.py             # Configuration management
 │       ├── logger.py             # Logging system
 │       └── utils.py              # Common utilities
-├── frontend/                  # Streamlit testing frontend
-│   └── streamlit_app.py       # Main Streamlit app
 ├── tests/                     # Test suite
 ├── docs/                      # Documentation
 ├── config.json               # Configuration file
@@ -571,19 +561,12 @@ response = requests.post(
 catalog_id = response.json()["catalog_id"]
 ```
 
-### 3. Streamlit Frontend
-```bash
-# Launch the testing frontend
-streamlit run frontend/streamlit_app.py
-```
-
 ## 🎯 Key Features
 
 ### Data Acquisition ✅
 - **Multi-source connectors** for PostgreSQL, S3, and APIs
 - **Connection testing** and validation
 - **Data source configuration** via REST API
-- **Streamlit UI** for easy data source management
 - **Edit functionality** for updating data source configurations
 - **Simplified S3 setup** (access key + secret key only)
 
@@ -699,11 +682,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ### Phase 1 (Current) ✅
 - ✅ **Acquire phase** with multi-source connectors (PostgreSQL, S3)
-- ✅ **Data source configuration** via API and UI
+- ✅ **Data source configuration** via API
 - ✅ **Connection testing** and validation
 - ✅ **Simplified S3 configuration** (no session tokens)
 - ✅ **FastAPI backend** with comprehensive APIs
-- ✅ **Streamlit testing frontend** with edit functionality
 - ✅ **Discover phase** with enhanced metadata analysis
 - ✅ **Data quality assessment**
 

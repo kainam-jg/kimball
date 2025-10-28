@@ -6,17 +6,13 @@
 ```bash
 # Start FastAPI server with hot reloading
 start_server.bat
-
-# Start Streamlit frontend
-cd frontend
-start_streamlit.bat
 ```
 
 ## 🔧 Development Features
 
 ### Hot Reloading
 - **FastAPI Server**: Automatically restarts when you save Python files
-- **File Watching**: Monitors `kimball/` and `frontend/` directories
+- **File Watching**: Monitors `kimball/` directory
 - **Debug Mode**: Detailed error messages and stack traces
 - **Access Logs**: Track all API requests and responses
 
@@ -25,7 +21,6 @@ start_streamlit.bat
 - **API Documentation**: http://localhost:8000/docs
 - **Alternative Docs**: http://localhost:8000/redoc
 - **Health Check**: http://localhost:8000/health
-- **Streamlit Frontend**: http://localhost:8501
 
 ## 📁 File Structure
 
@@ -35,11 +30,7 @@ kimball/
 ├── stop_server.bat           # Stop server
 ├── tests/                    # Test suite directory
 │   ├── test_server.py        # Test server functionality
-│   ├── test_streamlit.py     # Test Streamlit functionality
 │   └── test_acquire.py       # Test acquire phase
-├── frontend/
-│   ├── start_streamlit.bat   # Start Streamlit frontend
-│   └── stop_streamlit.bat    # Stop Streamlit frontend
 └── requirements.txt          # Python dependencies
 ```
 
@@ -47,18 +38,13 @@ kimball/
 
 ### 1. Start Development Environment
 ```bash
-# Terminal 1: Start FastAPI backend
+# Start FastAPI backend
 start_server.bat
-
-# Terminal 2: Start Streamlit frontend
-cd frontend
-start_streamlit.bat
 ```
 
 ### 2. Make Changes
 - Edit Python files in `kimball/` directory
 - Server automatically restarts on file changes
-- Frontend automatically reloads on file changes
 - Check console for error messages
 
 ### 3. Test Changes
@@ -68,7 +54,6 @@ python run_tests.py
 
 # Test individual components
 python tests/test_server.py
-python tests/test_streamlit.py
 python tests/test_acquire.py
 ```
 
@@ -76,10 +61,6 @@ python tests/test_acquire.py
 ```bash
 # Stop FastAPI server
 stop_server.bat
-
-# Stop Streamlit frontend
-cd frontend
-stop_streamlit.bat
 ```
 
 ## 🔍 Debugging
@@ -89,11 +70,6 @@ stop_streamlit.bat
 - **Detailed Logs**: Check console output for errors
 - **API Testing**: Use http://localhost:8000/docs for interactive testing
 - **Health Check**: http://localhost:8000/health
-
-### Streamlit Debugging
-- **Error Messages**: Displayed in browser console
-- **File Reloading**: Automatic on file save
-- **Debug Mode**: Built-in Streamlit debugging
 
 ## 📊 Monitoring
 
