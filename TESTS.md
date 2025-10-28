@@ -590,6 +590,70 @@ curl -X DELETE "http://localhost:8000/api/v1/transform/transformations/daily_sal
 
 ---
 
+## 🎯 **Demo Phase** ✅ **ACTIVE**
+
+### **Database Management Utilities**
+
+#### **Get Demo Status**
+```bash
+curl -X GET "http://localhost:8000/api/v1/demo/status"
+```
+
+#### **List All Schemas**
+```bash
+curl -X GET "http://localhost:8000/api/v1/demo/schemas"
+```
+
+#### **List Tables in Schema**
+```bash
+curl -X GET "http://localhost:8000/api/v1/demo/list-tables/bronze"
+curl -X GET "http://localhost:8000/api/v1/demo/list-tables/silver"
+curl -X GET "http://localhost:8000/api/v1/demo/list-tables/metadata"
+```
+
+### **Table Operations**
+
+#### **Drop All Tables in Schemas** ✅ **WORKING**
+```bash
+curl -X POST "http://localhost:8000/api/v1/demo/drop-tables" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "schemas": ["bronze", "silver"],
+    "operation": "drop"
+  }'
+```
+
+#### **Truncate All Tables in Schemas** ✅ **WORKING**
+```bash
+curl -X POST "http://localhost:8000/api/v1/demo/truncate-tables" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "schemas": ["metadata"],
+    "operation": "truncate"
+  }'
+```
+
+#### **Complete Cleanup (Equivalent to Original Script)** ✅ **WORKING**
+```bash
+curl -X POST "http://localhost:8000/api/v1/demo/cleanup-all"
+```
+
+**This endpoint performs the exact same operations as your original script:**
+- Drops all tables in `bronze` schema
+- Drops all tables in `silver` schema  
+- Truncates all tables in `metadata` schema
+
+### **Demo API Features**
+
+- **✅ Direct ClickHouse Connection**: Uses `clickhouse_connect` library independently
+- **✅ No Interference**: Does not affect existing DatabaseManager or connection classes
+- **✅ Comprehensive Operations**: Drop, truncate, list tables and schemas
+- **✅ Error Handling**: Detailed error messages and logging
+- **✅ Batch Operations**: Process multiple schemas in single request
+- **✅ Complete Cleanup**: One-click equivalent to your original script
+
+---
+
 ## 🏗️ **Model Phase** ✅ **ACTIVE**
 
 ### **ERD Analysis**

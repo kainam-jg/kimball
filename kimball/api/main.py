@@ -22,6 +22,7 @@ from .acquire_routes import acquire_router
 from .discover_routes import discover_router
 from .transform_routes import transform_router
 from .model_routes import model_router
+from .demo_routes import demo_router
 
 # Future phases (commented out for systematic testing)
 # from .build_routes import build_router
@@ -58,6 +59,7 @@ app.include_router(acquire_router, tags=["Acquire"])
 app.include_router(discover_router, tags=["Discover"])
 app.include_router(model_router, tags=["Model"])
 app.include_router(transform_router, tags=["Transform"])
+app.include_router(demo_router, tags=["Demo"])
 
 # Future phases (commented out for systematic testing)
 # app.include_router(build_router, tags=["Build"])
@@ -68,7 +70,7 @@ async def root():
     return {
         "message": "KIMBALL API - Kinetic Intelligent Model Builder",
         "version": "2.0.0",
-        "phases": ["Acquire", "Discover", "Model", "Transform"],  # Currently active phases
+        "phases": ["Acquire", "Discover", "Model", "Transform", "Demo"],  # Currently active phases
         "docs": "/docs",
         "redoc": "/redoc"
     }
