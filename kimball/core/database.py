@@ -304,6 +304,32 @@ class DatabaseManager:
             self.logger.error(f"Error dropping table: {str(e)}")
             return False
     
+    def execute_command(self, command: str, connection_type: str = "clickhouse") -> bool:
+        """
+        Execute a DDL command (CREATE, DROP, TRUNCATE, etc.) that doesn't return results.
+        
+        Args:
+            command (str): DDL command to execute
+            connection_type (str): Type of connection to use
+            
+        Returns:
+            bool: True if command executed successfully
+        """
+        try:
+            conn = self.get_connection(connection_type)
+            if connection_type == "clickhouse":
+                # Execute ClickHouse command (for DDL operations)
+                conn.command(command)
+                self.logger.info(f"Command executed successfully: {command[:100]}...")
+                return True
+            else:
+                self.logger.error(f"Unsupported connection type for command: {connection_type}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Command execution error: {str(e)}")
+            return False
+
     def close_all_connections(self):
         """Close all database connections."""
         try:

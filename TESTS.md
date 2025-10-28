@@ -719,6 +719,33 @@ curl -X GET "http://localhost:8000/api/v1/model/hierarchies/levels"
 curl -X GET "http://localhost:8000/api/v1/model/hierarchies/levels?table_name=dealer_regions_stage1"
 ```
 
+### **Calendar Dimension Generation**
+
+#### **Generate Calendar Dimension**
+```bash
+# Generate calendar for a specific date range
+curl -X POST "http://localhost:8000/api/v1/model/calendar/generate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "start_date": "2024-01-01",
+    "end_date": "2024-12-31"
+  }'
+
+# Generate calendar for multiple years
+curl -X POST "http://localhost:8000/api/v1/model/calendar/generate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "start_date": "2020-01-01",
+    "end_date": "2030-12-31"
+  }'
+```
+
+#### **Check Calendar Status**
+```bash
+# Check if calendar dimension exists and get statistics
+curl -X GET "http://localhost:8000/api/v1/model/calendar/status"
+```
+
 ### **Comprehensive Analysis**
 
 #### **Perform Complete Model Analysis**
@@ -763,6 +790,42 @@ curl -X POST "http://localhost:8000/api/v1/model/analyze/all"
     "leaf_nodes": 2
   },
   "stored": true
+}
+```
+
+#### **Calendar Generation Response**
+```json
+{
+  "status": "success",
+  "message": "Calendar dimension generated successfully",
+  "start_date": "2024-01-01",
+  "end_date": "2024-12-31",
+  "total_records": 366,
+  "table_name": "silver.calendar_stage1",
+  "statistics": {
+    "total_records": 366,
+    "date_range": {
+      "min_date": "2024-01-01",
+      "max_date": "2024-12-31"
+    }
+  }
+}
+```
+
+#### **Calendar Status Response**
+```json
+{
+  "status": "exists",
+  "message": "Calendar dimension table exists",
+  "table_name": "silver.calendar_stage1",
+  "statistics": {
+    "total_records": 366,
+    "date_range": {
+      "min_date": "2024-01-01",
+      "max_date": "2024-12-31"
+    },
+    "years_covered": 1
+  }
 }
 ```
 
@@ -1147,6 +1210,14 @@ curl -X POST "http://localhost:8000/api/v1/transform/transformations/non_existen
 - ✅ **Advanced SQL**: Currency parsing, date conversion, and table optimization
 - ✅ **Parallel Execution**: Execute multiple transformations concurrently
 - ✅ **Schema Management**: transformation_schema_name for better organization
+
+### **Model Phase Enhancements**
+- ✅ **Calendar Dimension Generator**: Generate comprehensive time dimensions for silver schema
+- ✅ **Holiday Integration**: US holidays with working day calculations
+- ✅ **Multi-Level Time Attributes**: Year, quarter, month, week, day hierarchies
+- ✅ **Silver Schema Support**: calendar_stage1 table with _stage1 suffix convention
+- ✅ **API Endpoints**: Calendar generation and status checking endpoints
+- ✅ **SQL Escaping**: Proper handling of special characters in holiday names
 
 ### **Bug Fixes**
 - Fixed `postgresql` vs `postgres` source type validation

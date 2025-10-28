@@ -19,6 +19,7 @@ from datetime import datetime
 
 from ..model.erd_analyzer import ERDAnalyzer
 from ..model.hierarchy_analyzer import HierarchyAnalyzer
+from ..model.calendar_generator import CalendarGenerator
 from ..core.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,11 @@ class ERDRelationshipCreateRequest(BaseModel):
     relationship_type: str  # 'foreign_key', 'hierarchy', 'join', etc.
     confidence: float
     description: Optional[str] = None
+
+class CalendarGenerationRequest(BaseModel):
+    """Request model for calendar dimension generation."""
+    start_date: str  # Format: YYYY-MM-DD
+    end_date: str    # Format: YYYY-MM-DD
 
 # Dependency for database manager
 def get_db_manager():
@@ -1123,3 +1129,111 @@ async def delete_hierarchy(table_name: str, hierarchy_name: Optional[str] = None
     except Exception as e:
         logger.error(f"Error deleting hierarchy: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@model_router.post("/calendar/generate")
+async def generate_calendar_dimension(request: CalendarGenerationRequest):
+    """
+    Generate calendar dimension table in gold schema.
+    
+    Args:
+        request: CalendarGenerationRequest with start_date and end_date
+        
+    Returns:
+        Dict containing generation results and statistics
+    """
+    try:
+        logger.info(f"Starting calendar dimension generation from {request.start_date} to {request.end_date}")
+        
+        # Validate date format
+        try:
+            datetime.strptime(request.start_date, '%Y-%m-%d')
+            datetime.strptime(request.end_date, '%Y-%m-%d')
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+        
+        # Validate date range
+        if request.start_date >= request.end_date:
+            raise HTTPException(status_code=400, detail="Start date must be before end date")
+        
+        # Initialize calendar generator
+        db_manager = DatabaseManager()
+        calendar_generator = CalendarGenerator(db_manager)
+        
+        # Generate calendar dimension
+        result = calendar_generator.generate_calendar_dimension(
+            request.start_date, 
+            request.end_date
+        )
+        
+        if result["status"] == "error":
+            raise HTTPException(status_code=500, detail=result["message"])
+        
+        logger.info(f"Calendar dimension generation completed successfully")
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating calendar dimension: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate calendar dimension: {str(e)}")
+
+
+@model_router.get("/calendar/status")
+async def get_calendar_status():
+    """
+    Get status of the calendar dimension table.
+    
+    Returns:
+        Dict containing calendar dimension statistics
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # Check if table exists
+        check_table_sql = """
+        SELECT COUNT(*) as table_exists
+        FROM system.tables 
+        WHERE database = 'silver' AND name = 'calendar_stage1'
+        """
+        
+        result = db_manager.execute_query_dict(check_table_sql)
+        table_exists = result[0]['table_exists'] > 0 if result else False
+        
+        if not table_exists:
+            return {
+                "status": "not_exists",
+                "message": "Calendar dimension table does not exist",
+                "table_name": "silver.calendar_stage1"
+            }
+        
+        # Get statistics
+        stats_sql = """
+        SELECT 
+            COUNT(*) as total_records,
+            MIN(calendar_date) as min_date,
+            MAX(calendar_date) as max_date,
+            COUNT(DISTINCT calendar_year) as years_covered
+        FROM silver.calendar_stage1
+        """
+        
+        result = db_manager.execute_query_dict(stats_sql)
+        stats = result[0] if result else {}
+        
+        return {
+            "status": "exists",
+            "message": "Calendar dimension table exists",
+            "table_name": "silver.calendar_stage1",
+            "statistics": {
+                "total_records": stats.get('total_records', 0),
+                "date_range": {
+                    "min_date": str(stats.get('min_date', '')),
+                    "max_date": str(stats.get('max_date', ''))
+                },
+                "years_covered": stats.get('years_covered', 0)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting calendar status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get calendar status: {str(e)}")
