@@ -170,52 +170,16 @@ class CalendarGenerator:
             raise Exception("Failed to create calendar_stage1 table")
     
     def _insert_calendar_data(self, df: pd.DataFrame):
-        """Insert calendar data into the table."""
-        self.logger.info(f"Inserting {len(df)} calendar records")
+        """Insert calendar data into the table using bulk loading."""
+        self.logger.info(f"Bulk inserting {len(df)} calendar records")
         
-        # Insert data row by row to avoid complex SQL construction
-        for _, row in df.iterrows():
-            # Escape single quotes in string values
-            def escape_string(value):
-                return str(value).replace("'", "''")
-            
-            insert_sql = f"""
-            INSERT INTO silver.calendar_stage1 (
-                calendar_id, calendar_date, calendar_year, calendar_year_qtr,
-                calendar_qtr_num, calendar_qtr_name, calendar_year_month,
-                calendar_month_num, calendar_month_name, calendar_year_week,
-                calendar_week_num, calendar_week_name, calendar_day,
-                calendar_day_name, is_weekend, day_of_month, days_in_month,
-                holiday_name, holiday_flag, working, working_day, working_days
-            ) VALUES (
-                {int(row['calendar_id'])},
-                '{row['calendar_date'].strftime('%Y-%m-%d')}',
-                {int(row['calendar_year'])},
-                '{escape_string(row['calendar_year_qtr'])}',
-                {int(row['calendar_qtr_num'])},
-                '{escape_string(row['calendar_qtr_name'])}',
-                '{escape_string(row['calendar_year_month'])}',
-                {int(row['calendar_month_num'])},
-                '{escape_string(row['calendar_month_name'])}',
-                '{escape_string(row['calendar_year_week'])}',
-                '{escape_string(row['calendar_week_num'])}',
-                '{escape_string(row['calendar_week_name'])}',
-                {int(row['calendar_day'])},
-                '{escape_string(row['calendar_day_name'])}',
-                {int(row['is_weekend'])},
-                {int(row['day_of_month'])},
-                {int(row['days_in_month'])},
-                '{escape_string(row['holiday_name'])}',
-                '{escape_string(row['holiday_flag'])}',
-                {int(row['working'])},
-                {int(row['working_day'])},
-                {int(row['working_days'])}
-            )
-            """
-            
-            success = self.db_manager.execute_command(insert_sql)
-            if not success:
-                raise Exception(f"Failed to insert calendar record for date {row['calendar_date']}")
+        # Get ClickHouse client for bulk insert
+        client = self.db_manager.get_connection("clickhouse")
+        
+        # Use bulk insert for much better performance
+        client.insert_df('silver.calendar_stage1', df)
+        
+        self.logger.info(f"Successfully bulk inserted {len(df)} calendar records")
     
     def _get_calendar_stats(self) -> Dict[str, Any]:
         """Get statistics about the generated calendar dimension."""
