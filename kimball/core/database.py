@@ -123,6 +123,49 @@ class DatabaseManager:
             self.logger.error(f"Query execution error: {str(e)}")
             return None
     
+    def execute_query_dict(self, query: str, connection_type: str = "clickhouse") -> Optional[List[Dict[str, Any]]]:
+        """
+        Execute a SQL query and return results as dictionaries.
+        
+        USED BY: Discover phase (metadata analysis, type inference)
+        RETURNS: List of dictionaries for dictionary-based access (e.g., result[0]['column_name'])
+        
+        Args:
+            query (str): SQL query to execute
+            connection_type (str): Type of connection to use
+            
+        Returns:
+            Optional[List[Dict[str, Any]]]: Query results as dictionaries
+        """
+        try:
+            conn = self.get_connection(connection_type)
+            if connection_type == "clickhouse":
+                # Execute ClickHouse query
+                result = conn.query(query)
+                
+                # Convert result to list of dictionaries (for Discover phase compatibility)
+                if result.result_rows and result.column_names:
+                    column_names = result.column_names
+                    dict_results = []
+                    for row in result.result_rows:
+                        row_dict = {}
+                        for i, value in enumerate(row):
+                            if i < len(column_names):
+                                row_dict[column_names[i]] = value
+                        dict_results.append(row_dict)
+                    return dict_results
+                else:
+                    return []
+            else:
+                self.logger.error(f"Unsupported connection type for query: {connection_type}")
+                return None
+            
+            self.logger.info(f"Query executed successfully (dict): {query[:100]}...")
+            
+        except Exception as e:
+            self.logger.error(f"Query execution error (dict): {str(e)}")
+            return None
+    
     def get_tables(self, schema: str = "bronze", connection_type: str = "clickhouse") -> Optional[List[str]]:
         """
         Get list of tables in a schema.

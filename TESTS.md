@@ -179,7 +179,7 @@ curl -X POST "http://localhost:8000/api/v1/acquire/extract/sql/Vehicle%20Sales%2
 
 ---
 
-## 🔍 **Discover Phase**
+## 🔍 **Discover Phase** ✅ **WORKING**
 
 ### **Discovery Analysis**
 
@@ -190,27 +190,31 @@ curl -X GET "http://localhost:8000/api/v1/discover/status"
 
 **Expected Result**: Returns discovery phase status and metadata table information
 
-#### **Analyze Bronze Schema**
+#### **Analyze Bronze Schema** ✅ **WORKING**
 ```bash
 curl -X POST "http://localhost:8000/api/v1/discover/analyze" \
   -H "Content-Type: application/json" \
   -d '{
     "schema_name": "bronze",
     "include_sample_data": true,
-    "sample_size": 1000
+    "sample_size": 10
   }'
 ```
 
 **Expected Result**: 
 - Analyzes all tables in bronze schema
-- Creates metadata.discover table
+- Creates metadata.discover table with proper upsert functionality
 - Returns analysis results with inferred types and classifications
 - Example: `amount_sales` classified as `fact` (numeric), `sales_date` as `date`
+- **Upsert**: Running multiple times won't create duplicates
 
-#### **Get Discovery Metadata**
+#### **Get Discovery Metadata** ✅ **WORKING**
 ```bash
 # Get all metadata
 curl -X GET "http://localhost:8000/api/v1/discover/metadata"
+
+# Get metadata with limit
+curl -X GET "http://localhost:8000/api/v1/discover/metadata?limit=5"
 
 # Get metadata for specific table
 curl -X GET "http://localhost:8000/api/v1/discover/metadata?table_name=daily_sales"
@@ -223,21 +227,68 @@ curl -X GET "http://localhost:8000/api/v1/discover/metadata?table_name=daily_sal
 - Cardinality and data quality scores
 - Sample values
 
-#### **Edit Discovery Metadata**
+#### **Debug Table Analysis** ✅ **WORKING**
 ```bash
-curl -X PUT "http://localhost:8000/api/v1/discover/metadata" \
+curl -X GET "http://localhost:8000/api/v1/discover/debug/daily_sales"
+```
+
+**Expected Result**: Step-by-step analysis of table structure and data
+
+#### **Analyze Single Table** ✅ **WORKING**
+```bash
+curl -X POST "http://localhost:8000/api/v1/discover/analyze/table" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "table_name": "daily_sales",
+    "include_sample_data": true,
+    "sample_size": 10
+  }'
+```
+
+**Expected Result**: Detailed analysis of a single table
+
+#### **Test Intelligent Type Inference** ✅ **WORKING**
+```bash
+curl -X POST "http://localhost:8000/api/v1/discover/test/intelligent-inference" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "table_name": "daily_sales",
+    "column_name": "amount_sales",
+    "sample_size": 100
+  }'
+```
+
+**Expected Result**: Tests the intelligent type inference system on a specific column
+
+#### **Edit Discovery Metadata** ✅ **WORKING**
+```bash
+curl -X PUT "http://localhost:8000/api/v1/discover/metadata/edit" \
   -H "Content-Type: application/json" \
   -d '{
     "original_table_name": "daily_sales",
     "original_column_name": "amount_sales",
-    "new_table_name": "sales_transactions",
     "new_column_name": "sales_amount",
-    "inferred_type": "decimal",
+    "inferred_type": "numeric",
     "classification": "fact"
   }'
 ```
 
 **Expected Result**: Updates metadata for the specified column
+
+#### **Learn from Corrections** ✅ **WORKING**
+```bash
+curl -X POST "http://localhost:8000/api/v1/discover/learn/correction" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "table_name": "daily_sales",
+    "column_name": "sales_date",
+    "predicted_type": "string",
+    "actual_type": "date",
+    "confidence": 0.3
+  }'
+```
+
+**Expected Result**: Improves future predictions based on user corrections
 
 #### **Analyze Entire Schema**
 ```bash
@@ -897,6 +948,15 @@ curl -X POST "http://localhost:8000/api/v1/transform/udfs/execute" \
 - ✅ **String Streams**: Standardized data handling with string conversion
 - ✅ **Batch Optimization**: 1000-record batches for optimal ClickHouse insertion
 
+### **Discover Phase Enhancements**
+- ✅ **Dictionary-Based Functions**: Created `execute_query_dict()` for Discover phase compatibility
+- ✅ **Upsert Functionality**: Fixed metadata.discover table to prevent duplicates
+- ✅ **ReplacingMergeTree**: Proper deduplication using composite key (table_name, column_name)
+- ✅ **Type Inference**: Intelligent type detection (date, numeric, string) with confidence scoring
+- ✅ **Fact/Dimension Classification**: Automatic classification of columns
+- ✅ **Learning System**: Ability to learn from user corrections
+- ✅ **No Regressions**: Acquire phase continues to work with tuple-based functions
+
 ### **Performance Improvements**
 - **Database Extraction**: 200K chunks from PostgreSQL → 1000 batches to ClickHouse
 - **Storage Extraction**: Header-based column detection and table creation
@@ -908,6 +968,9 @@ curl -X POST "http://localhost:8000/api/v1/transform/udfs/execute" \
 - Fixed indentation errors in acquire_routes.py
 - Fixed column name mismatches in ClickHouse table creation
 - Fixed hanging issues during large dataset processing
+- Fixed tuple vs dictionary access patterns in Discover phase
+- Fixed metadata.discover table upsert functionality
+- Fixed duplicate records in metadata storage
 
 ---
 

@@ -267,30 +267,26 @@ async def debug_table_analysis(table_name: str):
         
         # Test 1: Get table schema
         schema_query = f"DESCRIBE TABLE bronze.{table_name}"
-        schema_result = db_manager.execute_query(schema_query)
+        schema_result = db_manager.execute_query_dict(schema_query)
         
         if not schema_result:
             return {"error": f"Table {table_name} not found", "step": "schema_query"}
         
         # Test 2: Get row count
         count_query = f"SELECT COUNT(*) FROM bronze.{table_name}"
-        count_result = db_manager.execute_query(count_query)
+        count_result = db_manager.execute_query_dict(count_query)
         
         if not count_result:
             return {"error": "Failed to get row count", "step": "count_query"}
         
         # Test 3: Get first column info
         first_col = schema_result[0]
-        if isinstance(first_col, dict):
-            col_name = first_col.get('name', '')
-            col_type = first_col.get('type', 'String')
-        else:
-            col_name = first_col[0]
-            col_type = first_col[1]
+        col_name = first_col.get('name', '')
+        col_type = first_col.get('type', 'String')
         
         # Test 4: Get cardinality for first column
         cardinality_query = f"SELECT COUNT(DISTINCT `{col_name}`) FROM bronze.{table_name}"
-        cardinality_result = db_manager.execute_query(cardinality_query)
+        cardinality_result = db_manager.execute_query_dict(cardinality_query)
         
         return {
             "status": "success",
@@ -315,7 +311,7 @@ async def get_discovery_status():
         
         # Test basic connection first
         test_query = "SELECT 1 as test"
-        test_result = db_manager.execute_query(test_query)
+        test_result = db_manager.execute_query_dict(test_query)
         
         if not test_result:
             return {
@@ -328,19 +324,15 @@ async def get_discovery_status():
         
         # Get bronze schema tables
         tables_query = "SHOW TABLES FROM bronze"
-        tables_result = db_manager.execute_query(tables_query)
+        tables_result = db_manager.execute_query_dict(tables_query)
         
         # Handle the result properly - it should be a list of dictionaries
         tables = []
         if tables_result:
             for row in tables_result:
-                if isinstance(row, dict):
-                    # Get the first value from the dictionary (table name)
-                    table_name = list(row.values())[0]
-                    tables.append(table_name)
-                else:
-                    # Handle tuple/list format
-                    tables.append(row[0])
+                # Get the first value from the dictionary (table name)
+                table_name = list(row.values())[0]
+                tables.append(table_name)
         
         return {
             "phase": "discover",
@@ -439,74 +431,59 @@ async def analyze_single_table(table_name: str, include_sample_data: bool = True
     
     # Get table schema
     schema_query = f"DESCRIBE TABLE bronze.{table_name}"
-    schema_result = db_manager.execute_query(schema_query)
+    schema_result = db_manager.execute_query_dict(schema_query)
     
     if not schema_result:
         raise HTTPException(status_code=404, detail=f"Table {table_name} not found")
     
     # Get row count
     count_query = f"SELECT COUNT(*) FROM bronze.{table_name}"
-    count_result = db_manager.execute_query(count_query)
+    count_result = db_manager.execute_query_dict(count_query)
     
-    # Handle dictionary format from DatabaseManager.execute_query
-    if count_result and isinstance(count_result[0], dict):
+    # Handle dictionary format from DatabaseManager.execute_query_dict
+    if count_result and count_result[0]:
         row_count = count_result[0]['COUNT()']
-    elif count_result:
-        row_count = count_result[0][0]
     else:
         row_count = 0
     
     # Analyze each column
     columns_analysis = []
     for col_info in schema_result:
-        # Handle dictionary format from DatabaseManager.execute_query
-        if isinstance(col_info, dict):
-            col_name = col_info.get('name', '')
-            col_type = col_info.get('type', 'String')
-        else:
-            # Fallback for tuple format
-            col_name = col_info[0]
-            col_type = col_info[1]
+        col_name = col_info.get('name', '')
+        col_type = col_info.get('type', 'String')
         
         logger.info(f"Analyzing column: {col_name}")
         
         # Get cardinality
         cardinality_query = f"SELECT COUNT(DISTINCT `{col_name}`) FROM bronze.{table_name}"
-        cardinality_result = db_manager.execute_query(cardinality_query)
+        cardinality_result = db_manager.execute_query_dict(cardinality_query)
         
         # Handle dictionary format
-        if cardinality_result and isinstance(cardinality_result[0], dict):
+        if cardinality_result and cardinality_result[0]:
             cardinality = cardinality_result[0][f'COUNTDistinct({col_name})']
-        elif cardinality_result:
-            cardinality = cardinality_result[0][0]
         else:
             cardinality = 0
         
         # Get null count
         null_query = f"SELECT COUNT(*) FROM bronze.{table_name} WHERE `{col_name}` = '' OR `{col_name}` IS NULL"
-        null_result = db_manager.execute_query(null_query)
+        null_result = db_manager.execute_query_dict(null_query)
         
         # Handle dictionary format
-        if null_result and isinstance(null_result[0], dict):
+        if null_result and null_result[0]:
             null_count = null_result[0]['COUNT()']
-        elif null_result:
-            null_count = null_result[0][0]
         else:
             null_count = 0
         
         # Get sample values for type inference
         sample_query = f"SELECT DISTINCT `{col_name}` FROM bronze.{table_name} WHERE `{col_name}` != '' AND `{col_name}` IS NOT NULL LIMIT {sample_size}"
-        sample_result = db_manager.execute_query(sample_query)
+        sample_result = db_manager.execute_query_dict(sample_query)
         
         # Handle dictionary format
         sample_values = []
         if sample_result:
             for row in sample_result:
-                if isinstance(row, dict):
-                    # Get the first value from the dictionary (the column value)
-                    sample_values.append(list(row.values())[0])
-                else:
-                    sample_values.append(row[0])
+                # Get the first value from the dictionary (the column value)
+                sample_values.append(list(row.values())[0])
         
         # Infer data type from string values using intelligent inference
         type_inference_result = type_inference_engine.infer_column_type(sample_values, col_name)
@@ -650,16 +627,13 @@ async def test_intelligent_inference(request: ColumnAnalysisRequest):
         
         # Get sample values from the column
         sample_query = f"SELECT DISTINCT `{request.column_name}` FROM bronze.{request.table_name} WHERE `{request.column_name}` != '' AND `{request.column_name}` IS NOT NULL LIMIT {request.sample_size}"
-        sample_result = db_manager.execute_query(sample_query)
+        sample_result = db_manager.execute_query_dict(sample_query)
         
         # Handle dictionary format
         sample_values = []
         if sample_result:
             for row in sample_result:
-                if isinstance(row, dict):
-                    sample_values.append(list(row.values())[0])
-                else:
-                    sample_values.append(row[0])
+                sample_values.append(list(row.values())[0])
         
         # Use intelligent type inference
         inference_result = type_inference_engine.infer_column_type(sample_values, request.column_name)
@@ -887,7 +861,7 @@ async def query_discover_metadata(
         LIMIT {limit}
         """
         
-        results = db_manager.execute_query(query)
+        results = db_manager.execute_query_dict(query)
         
         return {
             "status": "success",
@@ -942,7 +916,7 @@ async def get_discover_metadata(
         LIMIT {limit}
         """
         
-        results = db_manager.execute_query(query)
+        results = db_manager.execute_query_dict(query)
         
         # Group results by table for better organization
         tables_metadata = {}
@@ -1256,8 +1230,8 @@ async def analyze_bronze_schema(request: DiscoveryRequest):
         ORDER BY name
         """
         
-        tables_result = db_manager.execute_query(tables_query)
-        table_names = [row[0] for row in tables_result] if tables_result else []
+        tables_result = db_manager.execute_query_dict(tables_query)
+        table_names = [row['name'] for row in tables_result] if tables_result else []
         
         if not table_names:
             return {
@@ -1289,7 +1263,7 @@ async def analyze_bronze_schema(request: DiscoveryRequest):
         ORDER BY (original_table_name, original_column_name)
         """
         
-        db_manager.execute_query(create_table_query)
+        db_manager.execute_query_dict(create_table_query)
         logger.info("Created metadata.discover table")
         
         # Analyze each table
@@ -1309,9 +1283,11 @@ async def analyze_bronze_schema(request: DiscoveryRequest):
             ORDER BY position
             """
             
-            columns_result = db_manager.execute_query(columns_query)
+            columns_result = db_manager.execute_query_dict(columns_query)
             
-            for column_name, column_type in columns_result or []:
+            for col_info in columns_result or []:
+                column_name = col_info['name']
+                column_type = col_info['type']
                 logger.info(f"Analyzing column: {table_name}.{column_name}")
                 
                 # Get sample data for analysis
@@ -1324,8 +1300,8 @@ async def analyze_bronze_schema(request: DiscoveryRequest):
                 """
                 
                 try:
-                    sample_result = db_manager.execute_query(sample_query)
-                    sample_values = [str(row[0]) for row in sample_result] if sample_result else []
+                    sample_result = db_manager.execute_query_dict(sample_query)
+                    sample_values = [str(list(row.values())[0]) for row in sample_result] if sample_result else []
                 except Exception as e:
                     logger.warning(f"Could not get sample data for {table_name}.{column_name}: {e}")
                     sample_values = []
@@ -1339,9 +1315,9 @@ async def analyze_bronze_schema(request: DiscoveryRequest):
                 """
                 
                 try:
-                    stats_result = db_manager.execute_query(cardinality_query)
-                    cardinality = stats_result[0][0] if stats_result else 0
-                    null_count = stats_result[0][1] if stats_result else 0
+                    stats_result = db_manager.execute_query_dict(cardinality_query)
+                    cardinality = stats_result[0]['cardinality'] if stats_result else 0
+                    null_count = stats_result[0]['null_count'] if stats_result else 0
                 except Exception as e:
                     logger.warning(f"Could not get stats for {table_name}.{column_name}: {e}")
                     cardinality = 0
@@ -1357,36 +1333,27 @@ async def analyze_bronze_schema(request: DiscoveryRequest):
                 total_records = cardinality + null_count
                 quality_score = (cardinality / total_records) if total_records > 0 else 0.0
                 
-                # Insert metadata
+                # Insert metadata with proper upsert using ReplacingMergeTree
                 sample_values_str = "[" + ",".join([f"'{v.replace(chr(39), chr(39)+chr(39))}'" for v in sample_values[:5]]) + "]"
                 insert_query = f"""
                 INSERT INTO metadata.discover VALUES (
                     '{table_name}',
+                    '{column_name}',
                     '{table_name}',
                     '{column_name}',
-                    '{column_name}',
-                    '{column_type}',
                     '{inference_result.inferred_type}',
-                    {inference_result.confidence},
-                    '{inference_result.pattern_matched or ""}',
-                    '{inference_result.reasoning}',
+                    '{classification}',
                     {cardinality},
                     {null_count},
-                    {(null_count / (cardinality + null_count)) * 100 if (cardinality + null_count) > 0 else 0},
-                    '{classification}',
-                    0.8,
-                    'Auto-classified based on data type',
-                    0,
-                    {quality_score},
-                    {cardinality / (cardinality + null_count) if (cardinality + null_count) > 0 else 0},
                     {sample_values_str},
+                    {quality_score},
+                    1,
                     now(),
-                    now(),
-                    1
+                    now()
                 )
                 """
                 
-                db_manager.execute_query(insert_query)
+                db_manager.execute_query_dict(insert_query)
                 
                 analysis_results.append({
                     "table_name": table_name,
@@ -1533,7 +1500,7 @@ async def edit_discover_metadata(request: MetadataEditRequest):
                     now()
                 )
                 """
-                db_manager.execute_query(bulk_update_query)
+                db_manager.execute_query_dict(bulk_update_query)
         
         if request.new_column_name:
             update_fields.append(f"new_column_name = '{request.new_column_name}'")
@@ -1573,7 +1540,7 @@ async def edit_discover_metadata(request: MetadataEditRequest):
         )
         """
         
-        db_manager.execute_query(insert_query)
+        db_manager.execute_query_dict(insert_query)
         
         return {
             "status": "success",
