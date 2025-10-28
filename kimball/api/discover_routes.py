@@ -874,71 +874,6 @@ async def query_discover_metadata(
         logger.error(f"Error querying discover metadata: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@discover_router.get("/metadata")
-async def get_discover_metadata(
-    table_name: Optional[str] = None,
-    limit: int = 100
-):
-    """Get discovery metadata for all tables or a specific table."""
-    try:
-        db_manager = DatabaseManager()
-        
-        # Build query with optional table filter
-        where_clause = ""
-        if table_name:
-            where_clause = f"WHERE original_table_name = '{table_name}'"
-        
-        query = f"""
-        SELECT 
-            original_table_name,
-            new_table_name,
-            original_column_name,
-            new_column_name,
-            bronze_type,
-            inferred_type,
-            type_confidence,
-            pattern_matched,
-            reasoning,
-            cardinality,
-            null_count,
-            null_percentage,
-            classification,
-            classification_confidence,
-            data_quality_score,
-            cardinality_ratio,
-            sample_values,
-            analysis_timestamp,
-            created_at,
-            version
-        FROM metadata.discover
-        {where_clause}
-        ORDER BY original_table_name, original_column_name
-        LIMIT {limit}
-        """
-        
-        results = db_manager.execute_query_dict(query)
-        
-        # Group results by table for better organization
-        tables_metadata = {}
-        if results:
-            for row in results:
-                table_name_key = row["original_table_name"]
-                if table_name_key not in tables_metadata:
-                    tables_metadata[table_name_key] = []
-                tables_metadata[table_name_key].append(row)
-        
-        return {
-            "status": "success",
-            "query": query,
-            "tables": tables_metadata,
-            "total_records": len(results) if results else 0,
-            "table_count": len(tables_metadata)
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting discover metadata: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 @discover_router.put("/metadata/edit")
 async def edit_discover_metadata(request: MetadataEditRequest):
     """
@@ -1336,7 +1271,21 @@ async def analyze_bronze_schema(request: DiscoveryRequest):
                 # Insert metadata with proper upsert using ReplacingMergeTree
                 sample_values_str = "[" + ",".join([f"'{v.replace(chr(39), chr(39)+chr(39))}'" for v in sample_values[:5]]) + "]"
                 insert_query = f"""
-                INSERT INTO metadata.discover VALUES (
+                INSERT INTO metadata.discover (
+                    original_table_name,
+                    original_column_name,
+                    new_table_name,
+                    new_column_name,
+                    inferred_type,
+                    classification,
+                    cardinality,
+                    null_count,
+                    sample_values,
+                    data_quality_score,
+                    version,
+                    created_at,
+                    updated_at
+                ) VALUES (
                     '{table_name}',
                     '{column_name}',
                     '{table_name}',
@@ -1431,23 +1380,23 @@ async def get_discover_metadata(table_name: Optional[str] = None):
             ORDER BY original_table_name, original_column_name
             """
         
-        result = db_manager.execute_query(query)
+        result = db_manager.execute_query_dict(query)
         
         metadata = []
         for row in result or []:
             metadata.append({
-                "original_table_name": row[0],
-                "original_column_name": row[1],
-                "new_table_name": row[2],
-                "new_column_name": row[3],
-                "inferred_type": row[4],
-                "classification": row[5],
-                "cardinality": row[6],
-                "null_count": row[7],
-                "sample_values": row[8],
-                "data_quality_score": row[9],
-                "created_at": row[10].isoformat() if row[10] else None,
-                "updated_at": row[11].isoformat() if row[11] else None
+                "original_table_name": row['original_table_name'],
+                "original_column_name": row['original_column_name'],
+                "new_table_name": row['new_table_name'],
+                "new_column_name": row['new_column_name'],
+                "inferred_type": row['inferred_type'],
+                "classification": row['classification'],
+                "cardinality": row['cardinality'],
+                "null_count": row['null_count'],
+                "sample_values": row['sample_values'],
+                "data_quality_score": row['data_quality_score'],
+                "created_at": row['created_at'].isoformat() if row['created_at'] else None,
+                "updated_at": row['updated_at'].isoformat() if row['updated_at'] else None
             })
         
         return {
@@ -1484,7 +1433,21 @@ async def edit_discover_metadata(request: MetadataEditRequest):
             # If updating table name, update all columns for that table
             if request.new_table_name != request.original_table_name:
                 bulk_update_query = f"""
-                INSERT INTO metadata.discover VALUES (
+                INSERT INTO metadata.discover (
+                    original_table_name,
+                    original_column_name,
+                    new_table_name,
+                    new_column_name,
+                    inferred_type,
+                    classification,
+                    cardinality,
+                    null_count,
+                    sample_values,
+                    data_quality_score,
+                    version,
+                    created_at,
+                    updated_at
+                ) VALUES (
                     '{request.original_table_name}',
                     original_column_name,
                     '{request.new_table_name}',
@@ -1523,7 +1486,21 @@ async def edit_discover_metadata(request: MetadataEditRequest):
         
         # Perform upsert
         insert_query = f"""
-        INSERT INTO metadata.discover VALUES (
+        INSERT INTO metadata.discover (
+            original_table_name,
+            original_column_name,
+            new_table_name,
+            new_column_name,
+            inferred_type,
+            classification,
+            cardinality,
+            null_count,
+            sample_values,
+            data_quality_score,
+            version,
+            created_at,
+            updated_at
+        ) VALUES (
             '{request.original_table_name}',
             '{request.original_column_name}',
             '{request.new_table_name or request.original_table_name}',
