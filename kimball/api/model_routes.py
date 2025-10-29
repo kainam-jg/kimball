@@ -571,38 +571,48 @@ async def get_dimensional_model_recommendations(
     try:
         db_manager = DatabaseManager()
         
-        # Build query
+        # Build query - Get only the most recent recommendation per source_table
+        # This ensures renamed recommendations (e.g., dimension1_dim -> calendar_dim) don't show duplicates
         query = """
         SELECT 
-            recommended_name,
-            table_type,
-            source_table,
-            original_table_name,
-            hierarchy_name,
-            root_column,
-            leaf_column,
-            fact_columns,
-            dimension_keys,
-            columns,
-            column_details,
-            total_columns,
-            hierarchy_levels,
-            relationships,
-            recommendation_timestamp,
-            metadata_json
-        FROM metadata.dimensional_model
+            dm.recommended_name,
+            dm.table_type,
+            dm.source_table,
+            dm.original_table_name,
+            dm.hierarchy_name,
+            dm.root_column,
+            dm.leaf_column,
+            dm.fact_columns,
+            dm.dimension_keys,
+            dm.columns,
+            dm.column_details,
+            dm.total_columns,
+            dm.hierarchy_levels,
+            dm.relationships,
+            dm.recommendation_timestamp,
+            dm.metadata_json
+        FROM metadata.dimensional_model AS dm
+        INNER JOIN (
+            SELECT 
+                source_table,
+                max(recommendation_timestamp) as max_ts
+            FROM metadata.dimensional_model
+            GROUP BY source_table
+        ) AS latest ON dm.source_table = latest.source_table 
+            AND dm.recommendation_timestamp = latest.max_ts
         """
         
-        conditions = []
+        # Add filter conditions
+        where_parts = []
         if table_type:
-            conditions.append(f"table_type = '{table_type}'")
+            where_parts.append(f"dm.table_type = '{table_type}'")
         if recommended_name:
-            conditions.append(f"recommended_name = '{recommended_name}'")
+            where_parts.append(f"dm.recommended_name = '{recommended_name}'")
         
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
+        if where_parts:
+            query += " WHERE " + " AND ".join(where_parts)
         
-        query += " ORDER BY table_type, recommended_name"
+        query += " ORDER BY dm.table_type, dm.recommended_name"
         
         results = db_manager.execute_query_dict(query)
         

@@ -855,8 +855,12 @@ curl -X GET "http://localhost:8000/api/v1/model/dimensional-model/recommendation
 ```
 
 #### **Update Recommendation Names**
+
+The GET endpoint returns only the most recent recommendation per source_table, so old names won't appear after updates.
+
 ```bash
-# Rename recommended table (e.g., dimension1_dim -> calendar_dim)
+# Example: Update all recommendations with meaningful names
+# 1. Rename dimension1_dim -> calendar_dim
 curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendations" \
   -H "Content-Type: application/json" \
   -d '{
@@ -864,7 +868,31 @@ curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendation
     "new_table_name": "calendar_dim"
   }'
 
-# Rename table and update column names
+# 2. Rename dimension2_dim -> geography_dim  
+curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendations" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "recommended_name": "dimension2_dim",
+    "new_table_name": "geography_dim"
+  }'
+
+# 3. Rename dimension3_dim -> product_dim
+curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendations" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "recommended_name": "dimension3_dim",
+    "new_table_name": "product_dim"
+  }'
+
+# 4. Rename fact1_fact -> daily_sales_fact
+curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendations" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "recommended_name": "fact1_fact",
+    "new_table_name": "daily_sales_fact"
+  }'
+
+# Rename table and update column names (optional)
 curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendations" \
   -H "Content-Type: application/json" \
   -d '{
