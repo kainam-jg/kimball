@@ -1109,6 +1109,50 @@ curl -X POST "http://localhost:8000/api/v1/model/dimensional-model/generate-tran
 - ORDER BY is determined by table type (fact: dimension keys, dimension: root/leaf columns)
 - Table is automatically created if it doesn't exist
 
+#### **Execute Stage3 Transformations**
+```bash
+# Execute all stage3 transformations in parallel (default)
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/stage/stage3"
+
+# Execute all stage3 transformations sequentially
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/stage/stage3?parallel=false"
+
+# Execute specific stage3 transformation
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/geography_dim_transformation/execute?stage=stage3"
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/calendar_dim_transformation/execute?stage=stage3"
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/product_dim_transformation/execute?stage=stage3"
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/daily_sales_fact_transformation/execute?stage=stage3"
+```
+
+#### **Complete Stage3 Workflow**
+```bash
+# 1. Generate dimensional model recommendations
+curl -X POST "http://localhost:8000/api/v1/model/dimensional-model/recommend"
+
+# 2. (Optional) Update final_name for meaningful table names
+curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendations" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "recommended_name": "dimension2_dim",
+    "new_table_name": "geography_dim"
+  }'
+
+# 3. Generate stage3 transformations (creates SQL statements in metadata.transformation3)
+curl -X POST "http://localhost:8000/api/v1/model/dimensional-model/generate-transformations"
+
+# 4. Execute all stage3 transformations to create gold schema tables
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/stage/stage3"
+```
+
+**Note**: If you update hierarchies or recommendations, you may need to:
+1. Regenerate recommendations (step 1)
+2. Delete existing transformations before regenerating (if needed):
+   ```bash
+   curl -X DELETE "http://localhost:8000/api/v1/transform/transformations/geography_dim_transformation?stage=stage3"
+   ```
+3. Regenerate transformations (step 3)
+4. Re-execute transformations (step 4)
+
 ### **Stage4 Transformations - One Big Table (OBT)** ✅ **NEW**
 
 Stage4 transformations create One Big Table (OBT) degenerated star tables from the gold star schema. These tables always have the `_k` suffix and contain all dimension columns denormalized into a single table.
