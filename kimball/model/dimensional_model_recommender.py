@@ -686,11 +686,34 @@ class DimensionalModelRecommender:
             transformations_created = []
             transformation_counter = 1
             
-            # Get next transformation_id
+            # Ensure transformation3 table exists
+            create_table_sql = """
+            CREATE TABLE IF NOT EXISTS metadata.transformation3 (
+                transformation_stage String,
+                transformation_id UInt32,
+                transformation_name String,
+                transformation_schema_name String,
+                dependencies Array(String),
+                execution_frequency String,
+                source_schema String,
+                source_table String,
+                target_schema String,
+                target_table String,
+                execution_sequence UInt32,
+                sql_statement String,
+                statement_type String,
+                created_at DateTime DEFAULT now(),
+                updated_at DateTime DEFAULT now(),
+                version UInt64 DEFAULT 1
+            ) ENGINE = ReplacingMergeTree(version)
+            ORDER BY (transformation_id, execution_sequence)
+            """
+            self.db_manager.execute_command(create_table_sql)
+            
+            # Get next transformation_id from transformation3 table
             max_id_query = """
             SELECT max(transformation_id) as max_id
-            FROM metadata.transformation1
-            WHERE transformation_stage = 'stage3'
+            FROM metadata.transformation3
             """
             max_result = self.db_manager.execute_query_dict(max_id_query)
             next_transformation_id = (max_result[0]['max_id'] + 1) if max_result and max_result[0].get('max_id') else 1
@@ -828,7 +851,7 @@ FROM silver.{source_table};
                     escaped_sql = statement['sql_statement'].replace("'", "''")
                     
                     insert_transformation_sql = f"""
-                    INSERT INTO metadata.transformation1 (
+                    INSERT INTO metadata.transformation3 (
                         transformation_stage,
                         transformation_id,
                         transformation_name,

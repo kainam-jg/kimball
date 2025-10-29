@@ -80,6 +80,25 @@ class SQLValidationRequest(BaseModel):
 
 # Helper Functions
 
+def get_transformation_table(stage: str) -> str:
+    """
+    Get the transformation table name for a given stage.
+    
+    Args:
+        stage: Transformation stage (stage1, stage2, stage3, stage4)
+        
+    Returns:
+        Table name (e.g., 'metadata.transformation1')
+    """
+    stage_map = {
+        'stage1': 'transformation1',
+        'stage2': 'transformation2',
+        'stage3': 'transformation3',
+        'stage4': 'transformation4'
+    }
+    table_name = stage_map.get(stage, 'transformation1')
+    return f'metadata.{table_name}'
+
 def validate_sql(sql: str, stage: str) -> Dict[str, Any]:
     """
     Validate SQL syntax and structure for ClickHouse compatibility.
@@ -211,8 +230,35 @@ async def create_transformation(request: TransformationRequest):
                     detail=f"SQL validation failed for statement {statement.execution_sequence}: {'; '.join(validation['errors'])}"
                 )
         
+        # Get the correct table for this stage
+        table_name = get_transformation_table(request.transformation_stage)
+        
+        # Ensure the table exists (create if needed)
+        create_table_sql = f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            transformation_stage String,
+            transformation_id UInt32,
+            transformation_name String,
+            transformation_schema_name String,
+            dependencies Array(String),
+            execution_frequency String,
+            source_schema String,
+            source_table String,
+            target_schema String,
+            target_table String,
+            execution_sequence UInt32,
+            sql_statement String,
+            statement_type String,
+            created_at DateTime DEFAULT now(),
+            updated_at DateTime DEFAULT now(),
+            version UInt64 DEFAULT 1
+        ) ENGINE = ReplacingMergeTree(version)
+        ORDER BY (transformation_id, execution_sequence)
+        """
+        db_manager.execute_command(create_table_sql)
+        
         # Get next transformation_id (same for all statements in this transformation)
-        get_max_id_sql = "SELECT COALESCE(MAX(transformation_id), 0) as max_id FROM metadata.transformation1"
+        get_max_id_sql = f"SELECT COALESCE(MAX(transformation_id), 0) as max_id FROM {table_name}"
         max_id_result = db_manager.execute_query_dict(get_max_id_sql)
         next_transformation_id = (max_id_result[0]['max_id'] if max_id_result else 0) + 1
         
@@ -227,7 +273,7 @@ async def create_transformation(request: TransformationRequest):
             escaped_desc = (statement.description or f"{statement.statement_type} statement").replace("'", "''")
             
             insert_sql = f"""
-            INSERT INTO metadata.transformation1 (
+            INSERT INTO {table_name} (
                 transformation_stage,
                 transformation_id,
                 transformation_name,
@@ -300,10 +346,13 @@ async def update_transformation(transformation_name: str, request: Transformatio
     try:
         db_manager = DatabaseManager()
         
+        # Get the correct table for this stage
+        table_name = get_transformation_table(request.transformation_stage)
+        
         # First, check if transformation exists and get its transformation_id
         check_sql = f"""
         SELECT DISTINCT transformation_id 
-        FROM metadata.transformation1 
+        FROM {table_name} 
         WHERE transformation_name = '{transformation_name}'
         """
         existing_result = db_manager.execute_query_dict(check_sql)
@@ -311,7 +360,7 @@ async def update_transformation(transformation_name: str, request: Transformatio
         if not existing_result:
             raise HTTPException(
                 status_code=404, 
-                detail=f"Transformation '{transformation_name}' not found"
+                detail=f"Transformation '{transformation_name}' not found in {request.transformation_stage}"
             )
         
         existing_transformation_id = existing_result[0]['transformation_id']
@@ -344,7 +393,7 @@ async def update_transformation(transformation_name: str, request: Transformatio
             
             # Use INSERT with ReplacingMergeTree for upsert behavior
             upsert_sql = f"""
-            INSERT INTO metadata.transformation1 (
+            INSERT INTO {table_name} (
                 transformation_stage,
                 transformation_id,
                 transformation_name,
@@ -389,7 +438,7 @@ async def update_transformation(transformation_name: str, request: Transformatio
         # Get final count of statements for this transformation
         count_sql = f"""
         SELECT COUNT(*) as count 
-        FROM metadata.transformation1 
+        FROM {table_name} 
         WHERE transformation_name = '{transformation_name}'
         """
         count_result = db_manager.execute_query_dict(count_sql)
@@ -504,15 +553,17 @@ async def create_statement(request: StatementRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @transform_router.get("/transformations/{transformation_id}")
-async def get_transformation(transformation_id: str):
+async def get_transformation(transformation_id: str, stage: Optional[str] = Query(None, description="Filter by transformation stage")):
     """
     Get all statements for a specific transformation.
     
     This endpoint retrieves all SQL statements for a transformation
-    ordered by execution_sequence.
+    ordered by execution_sequence. Searches across all transformation tables
+    if stage is not specified.
     
     Parameters:
         - transformation_id: Unique identifier for the transformation
+        - stage: Optional stage to search in (stage1, stage2, stage3, stage4)
     
     Returns:
         Dict containing all statements for the transformation
@@ -520,26 +571,59 @@ async def get_transformation(transformation_id: str):
     try:
         db_manager = DatabaseManager()
         
-        query = f"""
-        SELECT 
-            transformation_stage,
-            transformation_id,
-            transformation_name,
-            execution_sequence,
-            sql_statement,
-            statement_type,
-            source_schema,
-            source_table,
-            target_schema,
-            target_table,
-            execution_frequency,
-            created_at,
-            updated_at,
-            version
-        FROM metadata.transformation1
-        WHERE transformation_name = '{transformation_id}'
-        ORDER BY execution_sequence
-        """
+        # If stage specified, search only that table
+        if stage:
+            table_name = get_transformation_table(stage)
+            query = f"""
+            SELECT 
+                transformation_stage,
+                transformation_id,
+                transformation_name,
+                execution_sequence,
+                sql_statement,
+                statement_type,
+                source_schema,
+                source_table,
+                target_schema,
+                target_table,
+                execution_frequency,
+                created_at,
+                updated_at,
+                version
+            FROM {table_name}
+            WHERE transformation_name = '{transformation_id}'
+            ORDER BY execution_sequence
+            """
+        else:
+            # Search across all tables
+            query = f"""
+            SELECT 
+                transformation_stage,
+                transformation_id,
+                transformation_name,
+                execution_sequence,
+                sql_statement,
+                statement_type,
+                source_schema,
+                source_table,
+                target_schema,
+                target_table,
+                execution_frequency,
+                created_at,
+                updated_at,
+                version
+            FROM (
+                SELECT * FROM metadata.transformation1
+                UNION ALL
+                SELECT * FROM metadata.transformation2
+                UNION ALL
+                SELECT * FROM metadata.transformation3
+                UNION ALL
+                SELECT * FROM metadata.transformation4
+            )
+            WHERE transformation_name = '{transformation_id}'
+            ORDER BY execution_sequence
+            """
         
         results = db_manager.execute_query_dict(query)
         
@@ -559,15 +643,16 @@ async def get_transformation(transformation_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @transform_router.delete("/transformations/{transformation_id}")
-async def delete_transformation(transformation_id: str):
+async def delete_transformation(transformation_id: str, stage: Optional[str] = Query(None, description="Filter by transformation stage")):
     """
     Delete an entire transformation and all its statements.
     
-    This endpoint removes all SQL statements for a transformation
-    from the metadata.transformation1 table.
+    This endpoint removes all SQL statements for a transformation.
+    If stage is specified, deletes only from that table; otherwise searches all tables.
     
     Parameters:
         - transformation_id: Unique identifier for the transformation
+        - stage: Optional stage to delete from (stage1, stage2, stage3, stage4)
     
     Returns:
         Dict containing deletion results
@@ -575,24 +660,49 @@ async def delete_transformation(transformation_id: str):
     try:
         db_manager = DatabaseManager()
         
-        # Check if transformation exists
-        existing_query = f"""
-        SELECT COUNT(*) as count FROM metadata.transformation1 
-        WHERE transformation_id = '{transformation_id}'
-        """
-        existing = db_manager.execute_query_dict(existing_query)
-        statement_count = existing[0]["count"] if existing else 0
-        
-        if statement_count == 0:
-            raise HTTPException(status_code=404, detail=f"Transformation '{transformation_id}' not found")
-        
-        # Delete all statements for the transformation
-        delete_sql = f"""
-        DELETE FROM metadata.transformation1
-        WHERE transformation_id = '{transformation_id}'
-        """
-        
-        db_manager.execute_query_dict(delete_sql)
+        if stage:
+            # Delete from specific table
+            table_name = get_transformation_table(stage)
+            existing_query = f"""
+            SELECT COUNT(*) as count FROM {table_name} 
+            WHERE transformation_name = '{transformation_id}'
+            """
+            existing = db_manager.execute_query_dict(existing_query)
+            statement_count = existing[0]["count"] if existing else 0
+            
+            if statement_count == 0:
+                raise HTTPException(status_code=404, detail=f"Transformation '{transformation_id}' not found in {stage}")
+            
+            delete_sql = f"""
+            DELETE FROM {table_name}
+            WHERE transformation_name = '{transformation_id}'
+            """
+            db_manager.execute_query_dict(delete_sql)
+        else:
+            # Search and delete from all tables
+            statement_count = 0
+            for stage_name in ['stage1', 'stage2', 'stage3', 'stage4']:
+                table_name = get_transformation_table(stage_name)
+                try:
+                    existing_query = f"""
+                    SELECT COUNT(*) as count FROM {table_name} 
+                    WHERE transformation_name = '{transformation_id}'
+                    """
+                    existing = db_manager.execute_query_dict(existing_query)
+                    count = existing[0]["count"] if existing else 0
+                    if count > 0:
+                        delete_sql = f"""
+                        DELETE FROM {table_name}
+                        WHERE transformation_name = '{transformation_id}'
+                        """
+                        db_manager.execute_query_dict(delete_sql)
+                        statement_count += count
+                except Exception:
+                    # Table might not exist, continue
+                    continue
+            
+            if statement_count == 0:
+                raise HTTPException(status_code=404, detail=f"Transformation '{transformation_id}' not found")
         
         return {
             "status": "success",
@@ -600,12 +710,14 @@ async def delete_transformation(transformation_id: str):
             "statements_deleted": statement_count
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error deleting transformation '{transformation_id}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @transform_router.post("/transformations/{transformation_id}/execute")
-async def execute_transformation(transformation_id: str):
+async def execute_transformation(transformation_id: str, stage: Optional[str] = Query(None, description="Transformation stage (stage1, stage2, stage3, stage4)")):
     """
     Execute a transformation using the TransformEngine.
     
@@ -614,6 +726,7 @@ async def execute_transformation(transformation_id: str):
     
     Parameters:
         - transformation_id: Unique identifier for the transformation
+        - stage: Optional stage name. If not provided, will search all tables.
     
     Returns:
         Dict containing execution results and metrics
@@ -622,7 +735,7 @@ async def execute_transformation(transformation_id: str):
         from ..core.transform_engine import TransformEngine
         
         engine = TransformEngine()
-        result = engine.execute_transformation(transformation_id)
+        result = engine.execute_transformation(transformation_id, stage)
         
         return result
         
@@ -640,6 +753,7 @@ async def execute_transformations_parallel(request: dict):
     
     Parameters:
         - transformation_names: List of transformation names to execute
+        - stage: Optional stage name. If not provided, will search for each transformation.
     
     Returns:
         Dict containing results for all transformations
@@ -647,18 +761,63 @@ async def execute_transformations_parallel(request: dict):
     try:
         from ..core.transform_engine import TransformEngine
         
-        # Extract transformation names from request
+        # Extract transformation names and stage from request
         transformation_names = request.get('transformation_names', [])
+        stage = request.get('stage')
+        
         if not transformation_names:
             raise HTTPException(status_code=400, detail="transformation_names is required")
         
         engine = TransformEngine()
-        result = engine.execute_transformations_parallel(transformation_names)
+        result = engine.execute_transformations_parallel(transformation_names, stage)
         
         return result
         
     except Exception as e:
         logger.error(f"Error executing transformations in parallel: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@transform_router.post("/transformations/execute/stage/{stage}")
+async def execute_all_transformations_for_stage(
+    stage: str,
+    parallel: bool = Query(True, description="Execute transformations in parallel (default: True)")
+):
+    """
+    Execute all transformations for a given stage.
+    
+    This endpoint finds all transformations in the specified stage and executes them.
+    Transformations within a stage can be executed in parallel or sequentially.
+    
+    Parameters:
+        - stage: Transformation stage (stage1, stage2, stage3, stage4)
+        - parallel: Whether to execute transformations in parallel (default: True)
+    
+    Returns:
+        Dict containing execution results for all transformations in the stage
+    
+    Example:
+        POST /api/v1/transform/transformations/execute/stage/stage3?parallel=true
+    """
+    try:
+        from ..core.transform_engine import TransformEngine
+        
+        # Validate stage
+        valid_stages = ['stage1', 'stage2', 'stage3', 'stage4']
+        if stage not in valid_stages:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid stage '{stage}'. Must be one of: {', '.join(valid_stages)}"
+            )
+        
+        engine = TransformEngine()
+        result = engine.execute_all_transformations_for_stage(stage, parallel)
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error executing all transformations for stage {stage}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @transform_router.get("/transformations")
@@ -669,7 +828,7 @@ async def get_transformations(
     """
     Get all transformations or filter by stage.
     
-    This endpoint retrieves all transformations from the metadata.transformation1 table
+    This endpoint retrieves all transformations from the appropriate transformation table(s)
     with optional filtering by transformation stage.
     
     Parameters:
@@ -682,44 +841,71 @@ async def get_transformations(
     try:
         db_manager = DatabaseManager()
         
-        where_conditions = []
         if stage:
-            where_conditions.append(f"transformation_stage = '{stage}'")
-        
-        where_clause = ""
-        if where_conditions:
-            where_clause = f"WHERE {' AND '.join(where_conditions)}"
-        
-        query = f"""
-        SELECT 
-            transformation_stage,
-            transformation_id,
-            execution_sequence,
-            sql_statement,
-            statement_type,
-            source_schema,
-            source_table,
-            target_schema,
-            target_table,
-            execution_frequency,
-            created_at,
-            updated_at,
-            version
-        FROM metadata.transformation1
-        {where_clause}
-        ORDER BY transformation_id, execution_sequence
-        LIMIT {limit}
-        """
+            # Query specific table
+            table_name = get_transformation_table(stage)
+            query = f"""
+            SELECT 
+                transformation_stage,
+                transformation_id,
+                transformation_name,
+                execution_sequence,
+                sql_statement,
+                statement_type,
+                source_schema,
+                source_table,
+                target_schema,
+                target_table,
+                execution_frequency,
+                created_at,
+                updated_at,
+                version
+            FROM {table_name}
+            ORDER BY transformation_id, execution_sequence
+            LIMIT {limit}
+            """
+        else:
+            # Query all tables
+            query = f"""
+            SELECT 
+                transformation_stage,
+                transformation_id,
+                transformation_name,
+                execution_sequence,
+                sql_statement,
+                statement_type,
+                source_schema,
+                source_table,
+                target_schema,
+                target_table,
+                execution_frequency,
+                created_at,
+                updated_at,
+                version
+            FROM (
+                SELECT * FROM metadata.transformation1
+                UNION ALL
+                SELECT * FROM metadata.transformation2
+                UNION ALL
+                SELECT * FROM metadata.transformation3
+                UNION ALL
+                SELECT * FROM metadata.transformation4
+            )
+            ORDER BY transformation_id, execution_sequence
+            LIMIT {limit}
+            """
         
         results = db_manager.execute_query_dict(query)
         
-        # Group results by transformation_id
+        # Group results by transformation_id and get name
         transformations = {}
         for row in results:
             trans_id = row["transformation_id"]
+            trans_name = row.get("transformation_name", f"transformation_{trans_id}")
             if trans_id not in transformations:
                 transformations[trans_id] = {
                     "transformation_id": trans_id,
+                    "transformation_name": trans_name,
                     "transformation_stage": row["transformation_stage"],
                     "statements": []
                 }
@@ -727,8 +913,8 @@ async def get_transformations(
         
         return {
             "status": "success",
+            "count": len(transformations),
             "transformations": list(transformations.values()),
-            "total_transformations": len(transformations),
             "filtered_by_stage": stage
         }
         

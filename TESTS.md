@@ -389,6 +389,14 @@ curl -X POST "http://localhost:8000/api/v1/discover/learn/correction" \
 
 ### **Multi-Statement Transformations** ✅ **WORKING**
 
+**Important**: Transformations are stored in separate tables based on stage:
+- `metadata.transformation1` → stage1 transformations
+- `metadata.transformation2` → stage2 transformations  
+- `metadata.transformation3` → stage3 transformations
+- `metadata.transformation4` → stage4 transformations
+
+All tables use the same schema and are automatically created when needed.
+
 #### **Get Transformation Status**
 ```bash
 curl -X GET "http://localhost:8000/api/v1/transform/status"
@@ -396,12 +404,25 @@ curl -X GET "http://localhost:8000/api/v1/transform/status"
 
 #### **List All Transformations**
 ```bash
+# Get all transformations across all stages
 curl -X GET "http://localhost:8000/api/v1/transform/transformations"
+
+# Get transformations for specific stage
+curl -X GET "http://localhost:8000/api/v1/transform/transformations?stage=stage1"
+curl -X GET "http://localhost:8000/api/v1/transform/transformations?stage=stage3"
+
+# Limit results
+curl -X GET "http://localhost:8000/api/v1/transform/transformations?stage=stage1&limit=50"
 ```
 
 #### **Get Specific Transformation**
 ```bash
+# Get transformation (searches all tables if stage not specified)
 curl -X GET "http://localhost:8000/api/v1/transform/transformations/daily_sales_stage1"
+
+# Get transformation from specific stage (faster)
+curl -X GET "http://localhost:8000/api/v1/transform/transformations/daily_sales_stage1?stage=stage1"
+curl -X GET "http://localhost:8000/api/v1/transform/transformations/calendar_dim_transformation?stage=stage3"
 ```
 
 ### **Create Multi-Statement Transformations**
@@ -583,10 +604,66 @@ curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/par
   }'
 ```
 
+#### **Execute All Transformations for a Stage** ✅ **NEW**
+```bash
+# Execute all stage1 transformations in parallel (default)
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/stage/stage1"
+
+# Execute all stage3 transformations in parallel
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/stage/stage3"
+
+# Execute all stage3 transformations sequentially
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/stage/stage3?parallel=false"
+
+# Execute all stage2 transformations (if any exist)
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/stage/stage2"
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Parallel execution completed for 4 transformations",
+  "stage": "stage3",
+  "transformations_executed": 4,
+  "successful_transformations": 4,
+  "failed_transformations": 0,
+  "total_statements_executed": 16,
+  "total_records_processed": 6209,
+  "total_execution_time": 0.57,
+  "results": {
+    "1": {
+      "status": "success",
+      "message": "Transformation 1 completed",
+      "transformation_id": "1",
+      "statements_executed": 4,
+      "statements_failed": 0,
+      "total_records_processed": 6209,
+      "total_execution_time": 0.48,
+      "execution_results": [...]
+    }
+  }
+}
+```
+
+**Features:**
+- **Stage-Aware**: Automatically finds all transformations in the specified stage
+- **Parallel/Sequential**: Choose between parallel (default) or sequential execution
+- **Comprehensive Results**: Detailed execution results for each transformation
+- **Error Handling**: Continues execution even if some transformations fail
+- **Performance**: Parallel execution provides significant speed improvements
+
 #### **Delete Transformation**
 ```bash
+# Delete transformation (searches and deletes from all tables if stage not specified)
 curl -X DELETE "http://localhost:8000/api/v1/transform/transformations/daily_sales_stage1"
+
+# Delete transformation from specific stage (more efficient)
+curl -X DELETE "http://localhost:8000/api/v1/transform/transformations/daily_sales_stage1?stage=stage1"
+curl -X DELETE "http://localhost:8000/api/v1/transform/transformations/calendar_dim_transformation?stage=stage3"
 ```
+
+**Note**: The Transform Engine automatically routes to the correct table based on stage. When executing transformations, you don't need to specify the stage - the engine will find the transformation across all tables.
 
 ---
 
@@ -1022,8 +1099,7 @@ curl -X POST "http://localhost:8000/api/v1/model/dimensional-model/generate-tran
 }
 ```
 
-**Note**: Stage3 transformations are stored in `metadata.transformation1` with:
-- `transformation_stage = 'stage3'`
+**Note**: Stage3 transformations are stored in `metadata.transformation3` (not transformation1):
 - Each transformation contains 4 SQL statements:
   1. `DROP TABLE IF EXISTS gold.final_name`
   2. `CREATE TABLE gold.final_name ... ENGINE = MergeTree() ORDER BY ...`
@@ -1031,6 +1107,7 @@ curl -X POST "http://localhost:8000/api/v1/model/dimensional-model/generate-tran
   4. `OPTIMIZE TABLE gold.final_name FINAL`
 - Column data types are extracted from source tables
 - ORDER BY is determined by table type (fact: dimension keys, dimension: root/leaf columns)
+- Table is automatically created if it doesn't exist
 
 ### **Model Phase Testing Tips**
 
@@ -1478,6 +1555,10 @@ curl -X POST "http://localhost:8000/api/v1/transform/transformations/non_existen
 - ✅ **Advanced SQL**: Currency parsing, date conversion, and table optimization
 - ✅ **Parallel Execution**: Execute multiple transformations concurrently
 - ✅ **Schema Management**: transformation_schema_name for better organization
+- ✅ **Stage-Based Table Separation**: Separate transformation tables for each stage (transformation1→stage1, transformation2→stage2, transformation3→stage3, transformation4→stage4)
+- ✅ **Automatic Table Creation**: Tables are automatically created when needed with proper schema
+- ✅ **Stage-Aware Routing**: Transform Engine and API endpoints automatically route to correct table based on stage
+- ✅ **Cross-Stage Search**: GET/DELETE endpoints can search across all stages or target specific stage for better performance
 
 ### **Model Phase Enhancements**
 - ✅ **Calendar Dimension Generator**: Generate comprehensive time dimensions for silver schema

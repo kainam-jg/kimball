@@ -32,37 +32,118 @@ class TransformEngine:
     This class handles the sequential execution of SQL statements
     that belong to the same transformation, ensuring proper order
     and error handling.
+    
+    Uses separate tables for each stage:
+    - transformation1 for stage1
+    - transformation2 for stage2
+    - transformation3 for stage3
+    - transformation4 for stage4
     """
     
     def __init__(self):
         self.db_manager = DatabaseManager()
         self.executor = ThreadPoolExecutor(max_workers=10)
     
-    def get_transformation_statements(self, transformation_id: str) -> List[Dict[str, Any]]:
+    def _get_table_name(self, stage: str) -> str:
+        """
+        Get the transformation table name for a given stage.
+        
+        Args:
+            stage: Transformation stage (stage1, stage2, stage3, stage4)
+            
+        Returns:
+            Table name (e.g., 'metadata.transformation1')
+        """
+        stage_map = {
+            'stage1': 'transformation1',
+            'stage2': 'transformation2',
+            'stage3': 'transformation3',
+            'stage4': 'transformation4'
+        }
+        table_name = stage_map.get(stage, 'transformation1')
+        return f'metadata.{table_name}'
+    
+    def _find_transformation_stage(self, transformation_id: str) -> Optional[str]:
+        """
+        Find which stage/table contains a transformation.
+        
+        Args:
+            transformation_id: Transformation name/ID to find
+            
+        Returns:
+            Stage name (e.g., 'stage1') or None if not found
+        """
+        for stage in ['stage1', 'stage2', 'stage3', 'stage4']:
+            table_name = self._get_table_name(stage)
+            try:
+                query = f"""
+                SELECT transformation_stage
+                FROM {table_name}
+                WHERE transformation_name = '{transformation_id}'
+                LIMIT 1
+                """
+                result = self.db_manager.execute_query_dict(query)
+                if result:
+                    return result[0].get('transformation_stage')
+            except Exception:
+                # Table might not exist yet, try next one
+                continue
+        return None
+    
+    def get_transformation_statements(self, transformation_id: str, stage: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get all statements for a transformation ordered by execution_sequence.
         
         Args:
-            transformation_id: Unique identifier for the transformation
+            transformation_id: Unique identifier for the transformation (can be ID number or name)
+            stage: Optional stage name. If not provided, will search all tables.
         
         Returns:
             List of statement dictionaries ordered by execution_sequence
         """
         try:
-            query = f"""
-            SELECT 
-                transformation_id,
-                transformation_name,
-                execution_sequence,
-                sql_statement,
-                statement_type,
-                created_at,
-                updated_at,
-                version
-            FROM metadata.transformation1
-            WHERE transformation_name = '{transformation_id}'
-            ORDER BY execution_sequence
-            """
+            # If stage not provided, find it
+            if not stage:
+                stage = self._find_transformation_stage(transformation_id)
+                if not stage:
+                    logger.warning(f"Transformation {transformation_id} not found in any table")
+                    return []
+            
+            table_name = self._get_table_name(stage)
+            
+            # Try to parse as integer for transformation_id, otherwise use as transformation_name
+            try:
+                trans_id_int = int(transformation_id)
+                query = f"""
+                SELECT 
+                    transformation_id,
+                    transformation_name,
+                    execution_sequence,
+                    sql_statement,
+                    statement_type,
+                    created_at,
+                    updated_at,
+                    version
+                FROM {table_name}
+                WHERE transformation_id = {trans_id_int}
+                ORDER BY execution_sequence
+                """
+            except ValueError:
+                # If not a number, treat as transformation_name
+                query = f"""
+                SELECT 
+                    transformation_id,
+                    transformation_name,
+                    execution_sequence,
+                    sql_statement,
+                    statement_type,
+                    created_at,
+                    updated_at,
+                    version
+                FROM {table_name}
+                WHERE transformation_name = '{transformation_id}'
+                ORDER BY execution_sequence
+                """
             
             results = self.db_manager.execute_query_dict(query)
             return results if results else []
@@ -71,18 +152,19 @@ class TransformEngine:
             logger.error(f"Error getting transformation statements for {transformation_id}: {e}")
             return []
     
-    def execute_transformation(self, transformation_id: str) -> Dict[str, Any]:
+    def execute_transformation(self, transformation_id: str, stage: Optional[str] = None) -> Dict[str, Any]:
         """
         Execute all statements for a transformation in sequence.
         
         Args:
             transformation_id: Unique identifier for the transformation
+            stage: Optional stage name. If not provided, will search all tables.
         
         Returns:
             Dict containing execution results and metrics
         """
         try:
-            statements = self.get_transformation_statements(transformation_id)
+            statements = self.get_transformation_statements(transformation_id, stage)
             if not statements:
                 return {
                     "status": "error",
@@ -170,7 +252,7 @@ class TransformEngine:
                 "statements_executed": 0
             }
     
-    def _execute_transformation_with_separate_db(self, transformation_id: str) -> Dict[str, Any]:
+    def _execute_transformation_with_separate_db(self, transformation_id: str, stage: Optional[str] = None) -> Dict[str, Any]:
         """
         Execute a single transformation with its own database manager instance.
         
@@ -179,6 +261,7 @@ class TransformEngine:
         
         Args:
             transformation_id: Unique identifier for the transformation
+            stage: Optional stage name. If not provided, will search all tables.
         
         Returns:
             Dict containing execution results
@@ -187,8 +270,8 @@ class TransformEngine:
             # Create a separate database manager for this thread
             db_manager = DatabaseManager()
             
-            # Get transformation statements
-            statements = self.get_transformation_statements(transformation_id)
+            # Get transformation statements (using the instance method to find stage)
+            statements = self.get_transformation_statements(transformation_id, stage)
             
             if not statements:
                 return {
@@ -279,12 +362,13 @@ class TransformEngine:
                 "statements_executed": 0
             }
     
-    def execute_transformations_parallel(self, transformation_ids: List[str]) -> Dict[str, Any]:
+    def execute_transformations_parallel(self, transformation_ids: List[str], stage: Optional[str] = None) -> Dict[str, Any]:
         """
         Execute multiple transformations in parallel.
         
         Args:
             transformation_ids: List of transformation IDs to execute
+            stage: Optional stage name. If not provided, will search for each transformation.
         
         Returns:
             Dict containing results for all transformations
@@ -294,7 +378,7 @@ class TransformEngine:
             
             # Submit all transformations to thread pool with separate database managers
             future_to_id = {
-                self.executor.submit(self._execute_transformation_with_separate_db, tid): tid 
+                self.executor.submit(self._execute_transformation_with_separate_db, tid, stage): tid 
                 for tid in transformation_ids
             }
             
@@ -342,18 +426,107 @@ class TransformEngine:
                 "transformations_executed": 0
             }
     
-    def get_transformation_status(self, transformation_id: str) -> Dict[str, Any]:
+    def get_all_transformation_ids_for_stage(self, stage: str) -> List[int]:
+        """
+        Get all transformation IDs for a given stage.
+        
+        Args:
+            stage: Transformation stage (stage1, stage2, stage3, stage4)
+        
+        Returns:
+            List of transformation IDs
+        """
+        try:
+            table_name = self._get_table_name(stage)
+            
+            query = f"""
+            SELECT DISTINCT transformation_id
+            FROM {table_name}
+            ORDER BY transformation_id
+            """
+            
+            results = self.db_manager.execute_query_dict(query)
+            if not results:
+                return []
+            
+            return [int(row["transformation_id"]) for row in results]
+            
+        except Exception as e:
+            logger.error(f"Error getting transformation IDs for stage {stage}: {e}")
+            return []
+    
+    def execute_all_transformations_for_stage(self, stage: str, parallel: bool = True) -> Dict[str, Any]:
+        """
+        Execute all transformations for a given stage.
+        
+        Args:
+            stage: Transformation stage (stage1, stage2, stage3, stage4)
+            parallel: Whether to execute transformations in parallel (default: True)
+        
+        Returns:
+            Dict containing execution results for all transformations
+        """
+        try:
+            # Get all transformation IDs for the stage
+            transformation_ids = self.get_all_transformation_ids_for_stage(stage)
+            
+            if not transformation_ids:
+                return {
+                    "status": "no_transformations",
+                    "message": f"No transformations found for stage {stage}",
+                    "stage": stage,
+                    "transformations_executed": 0
+                }
+            
+            # Convert to strings for the execution methods
+            transformation_id_strings = [str(tid) for tid in transformation_ids]
+            
+            if parallel:
+                # Execute in parallel
+                return self.execute_transformations_parallel(transformation_id_strings, stage)
+            else:
+                # Execute sequentially
+                results = {}
+                for trans_id in transformation_id_strings:
+                    result = self.execute_transformation(trans_id, stage)
+                    results[trans_id] = result
+                
+                # Calculate summary statistics
+                successful = sum(1 for r in results.values() if r.get("status") == "success")
+                failed = sum(1 for r in results.values() if r.get("status") == "error")
+                
+                return {
+                    "status": "success",
+                    "message": f"Sequential execution completed for {len(transformation_ids)} transformations",
+                    "stage": stage,
+                    "transformations_executed": len(transformation_ids),
+                    "successful_transformations": successful,
+                    "failed_transformations": failed,
+                    "results": results
+                }
+            
+        except Exception as e:
+            logger.error(f"Error executing all transformations for stage {stage}: {e}")
+            return {
+                "status": "error",
+                "message": f"Error executing transformations for stage {stage}: {str(e)}",
+                "stage": stage,
+                "transformations_executed": 0
+            }
+    
+    def get_transformation_status(self, transformation_id: str, stage: Optional[str] = None) -> Dict[str, Any]:
         """
         Get the current status of a transformation.
         
         Args:
             transformation_id: Unique identifier for the transformation
+            stage: Optional stage name. If not provided, will search all tables.
         
         Returns:
             Dict containing transformation status and metadata
         """
         try:
-            statements = self.get_transformation_statements(transformation_id)
+            statements = self.get_transformation_statements(transformation_id, stage)
             if not statements:
                 return {
                     "status": "not_found",
