@@ -571,50 +571,46 @@ async def get_dimensional_model_recommendations(
     try:
         db_manager = DatabaseManager()
         
-        # Build query - Get only the most recent recommendation per source_table
-        # This ensures renamed recommendations (e.g., dimension1_dim -> calendar_dim) don't show duplicates
+        # Build query - Get recommendations (unique by table_type, recommended_name, source_table)
+        # final_name can be updated by users to rename recommendations
         query = """
         SELECT 
-            dm.recommended_name,
-            dm.table_type,
-            dm.source_table,
-            dm.original_table_name,
-            dm.hierarchy_name,
-            dm.root_column,
-            dm.leaf_column,
-            dm.fact_columns,
-            dm.dimension_keys,
-            dm.columns,
-            dm.column_details,
-            dm.total_columns,
-            dm.hierarchy_levels,
-            dm.relationships,
-            dm.recommendation_timestamp,
-            dm.metadata_json
-        FROM metadata.dimensional_model AS dm
-        INNER JOIN (
-            SELECT 
-                source_table,
-                max(recommendation_timestamp) as max_ts
-            FROM metadata.dimensional_model
-            GROUP BY source_table
-        ) AS latest ON dm.source_table = latest.source_table 
-            AND dm.recommendation_timestamp = latest.max_ts
+            recommended_name,
+            final_name,
+            table_type,
+            source_table,
+            original_table_name,
+            hierarchy_name,
+            root_column,
+            leaf_column,
+            fact_columns,
+            dimension_keys,
+            columns,
+            column_details,
+            total_columns,
+            hierarchy_levels,
+            relationships,
+            recommendation_timestamp,
+            metadata_json
+        FROM metadata.dimensional_model
         """
         
         # Add filter conditions
         where_parts = []
         if table_type:
-            where_parts.append(f"dm.table_type = '{table_type}'")
+            where_parts.append(f"table_type = '{table_type}'")
         if recommended_name:
-            where_parts.append(f"dm.recommended_name = '{recommended_name}'")
+            where_parts.append(f"recommended_name = '{recommended_name}'")
         
         if where_parts:
             query += " WHERE " + " AND ".join(where_parts)
         
-        query += " ORDER BY dm.table_type, dm.recommended_name"
+        query += " ORDER BY table_type, final_name"
         
         results = db_manager.execute_query_dict(query)
+        
+        if results is None:
+            results = []
         
         return {
             "status": "success",
@@ -630,13 +626,13 @@ async def get_dimensional_model_recommendations(
 @model_router.put("/dimensional-model/recommendations")
 async def update_dimensional_model_recommendation(request: DimensionalModelRecommendationUpdateRequest):
     """
-    Update a dimensional model recommendation (table name and/or column names).
+    Update a dimensional model recommendation's final_name (and optionally column names).
     
-    This allows users to rename recommended tables (e.g., dimension1_dim -> calendar_dim)
-    and optionally rename columns.
+    This updates the final_name column which represents the user-defined table name for the gold schema.
+    The recommendation is uniquely identified by (table_type, recommended_name, source_table).
     
     Args:
-        request: Update request with recommended_name, new_table_name, and optional new_column_names
+        request: Update request with recommended_name (to find the record), new_table_name (for final_name), and optional new_column_names
         
     Returns:
         Dict[str, Any]: Update results
@@ -644,12 +640,11 @@ async def update_dimensional_model_recommendation(request: DimensionalModelRecom
     try:
         db_manager = DatabaseManager()
         
-        # Find the recommendation
+        # Find the recommendation by recommended_name (we need source_table and table_type for the WHERE clause)
         find_query = f"""
-        SELECT recommended_name, table_type
+        SELECT recommended_name, table_type, source_table, final_name
         FROM metadata.dimensional_model
         WHERE recommended_name = '{request.recommended_name}'
-        ORDER BY recommendation_timestamp DESC
         LIMIT 1
         """
         
@@ -661,119 +656,76 @@ async def update_dimensional_model_recommendation(request: DimensionalModelRecom
                 detail=f"Recommendation not found: {request.recommended_name}"
             )
         
-        # Get the full existing record
-        get_full_query = f"""
-        SELECT *
-        FROM metadata.dimensional_model
-        WHERE recommended_name = '{request.recommended_name}'
-        ORDER BY recommendation_timestamp DESC
-        LIMIT 1
-        """
+        record = existing[0]
+        table_type = record['table_type']
+        source_table = record['source_table']
         
-        existing_record = db_manager.execute_query_dict(get_full_query)
-        
-        if not existing_record:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Recommendation not found: {request.recommended_name}"
-            )
-        
-        record = existing_record[0]
-        
-        # Prepare new values
+        # Prepare updates
         escaped_new_name = request.new_table_name.replace("'", "''")
-        new_columns = record.get('columns', [])
-        new_column_details = record.get('column_details', [])
+        updates = [f"final_name = '{escaped_new_name}'"]
         
         # Update column names if provided
         if request.new_column_names:
-            old_columns = record.get('columns', [])
-            old_details = record.get('column_details', [])
+            # Get current columns and column_details
+            current_query = f"""
+            SELECT columns, column_details
+            FROM metadata.dimensional_model
+            WHERE recommended_name = '{request.recommended_name}'
+                AND source_table = '{source_table}'
+                AND table_type = '{table_type}'
+            LIMIT 1
+            """
+            current = db_manager.execute_query_dict(current_query)
             
-            # Apply column name mappings
-            new_columns = []
-            new_column_details = []
-            
-            for i, col in enumerate(old_columns):
-                new_col_name = request.new_column_names.get(col, col)
-                new_columns.append(new_col_name)
+            if current:
+                old_columns = current[0].get('columns', [])
+                old_details = current[0].get('column_details', [])
                 
-                # Update column details
-                if i < len(old_details):
-                    detail = old_details[i]
-                    parts = detail.split(':')
-                    if len(parts) >= 2:
-                        # Format: column_name:data_type:classification
-                        new_detail = f"{new_col_name}:{':'.join(parts[1:])}"
-                        new_column_details.append(new_detail)
+                # Apply column name mappings
+                new_columns = []
+                new_column_details = []
+                
+                for i, col in enumerate(old_columns):
+                    new_col_name = request.new_column_names.get(col, col)
+                    new_columns.append(new_col_name)
+                    
+                    # Update column details
+                    if i < len(old_details):
+                        detail = old_details[i]
+                        parts = detail.split(':')
+                        if len(parts) >= 2:
+                            # Format: column_name:data_type:classification
+                            new_detail = f"{new_col_name}:{':'.join(parts[1:])}"
+                            new_column_details.append(new_detail)
+                        else:
+                            new_column_details.append(detail)
                     else:
-                        new_column_details.append(detail)
-                else:
-                    new_column_details.append(f"{new_col_name}:String:dimension")
+                        new_column_details.append(f"{new_col_name}:String:dimension")
+                
+                updates.append(f"columns = {repr(new_columns)}")
+                updates.append(f"column_details = {repr(new_column_details)}")
         
-        # Prepare INSERT with new name and updated timestamp
-        # Since recommended_name is a key column, we INSERT a new record
-        current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        
-        # Build INSERT statement based on table type
-        if record.get('table_type') == 'dimension':
-            insert_sql = f"""
-            INSERT INTO metadata.dimensional_model (
-                id, recommendation_timestamp, table_type, recommended_name,
-                source_table, original_table_name, hierarchy_name,
-                root_column, leaf_column, columns, column_details,
-                total_columns, hierarchy_levels, metadata_json
-            ) VALUES (
-                {hash(request.new_table_name) % 2**63},
-                '{current_timestamp}',
-                'dimension',
-                '{escaped_new_name}',
-                '{record.get('source_table', '').replace("'", "''")}',
-                '{record.get('original_table_name', '').replace("'", "''")}',
-                '{record.get('hierarchy_name', '').replace("'", "''")}',
-                '{record.get('root_column', '').replace("'", "''")}',
-                '{record.get('leaf_column', '').replace("'", "''")}',
-                {repr(new_columns)},
-                {repr(new_column_details)},
-                {record.get('total_columns', 0)},
-                {record.get('hierarchy_levels', 0)},
-                '{str(record).replace("'", "''")[:1000]}'
-            )
-            """
-        else:  # fact table
-            insert_sql = f"""
-            INSERT INTO metadata.dimensional_model (
-                id, recommendation_timestamp, table_type, recommended_name,
-                source_table, original_table_name, fact_columns,
-                dimension_keys, columns, column_details, total_columns,
-                relationships, metadata_json
-            ) VALUES (
-                {hash(request.new_table_name) % 2**63},
-                '{current_timestamp}',
-                'fact',
-                '{escaped_new_name}',
-                '{record.get('source_table', '').replace("'", "''")}',
-                '{record.get('original_table_name', '').replace("'", "''")}',
-                {repr(record.get('fact_columns', []))},
-                {repr(record.get('dimension_keys', []))},
-                {repr(new_columns)},
-                {repr(new_column_details)},
-                {record.get('total_columns', 0)},
-                {repr(record.get('relationships', []))},
-                '{str(record).replace("'", "''")[:1000]}'
-            )
-            """
+        # Use ALTER TABLE UPDATE to update the existing record
+        # WHERE clause uses the unique key: (table_type, recommended_name, source_table)
+        update_sql = f"""
+        ALTER TABLE metadata.dimensional_model
+        UPDATE {', '.join(updates)}
+        WHERE recommended_name = '{request.recommended_name}'
+            AND source_table = '{source_table}'
+            AND table_type = '{table_type}'
+        """
         
         try:
-            db_manager.execute_command(insert_sql)
-            logger.info(f"Updated recommendation: {request.recommended_name} -> {request.new_table_name}")
+            db_manager.execute_command(update_sql)
+            logger.info(f"Updated final_name: {request.recommended_name} -> {request.new_table_name}")
             
-            # Get the new record
+            # Get updated record
             updated_query = f"""
             SELECT *
             FROM metadata.dimensional_model
-            WHERE recommended_name = '{request.new_table_name}'
-            ORDER BY recommendation_timestamp DESC
+            WHERE recommended_name = '{request.recommended_name}'
+                AND source_table = '{source_table}'
+                AND table_type = '{table_type}'
             LIMIT 1
             """
             
@@ -782,8 +734,8 @@ async def update_dimensional_model_recommendation(request: DimensionalModelRecom
             return {
                 "status": "success",
                 "message": "Recommendation updated successfully",
-                "old_name": request.recommended_name,
-                "new_name": request.new_table_name,
+                "recommended_name": request.recommended_name,
+                "final_name": request.new_table_name,
                 "updated": True,
                 "recommendation": updated[0] if updated else None
             }

@@ -519,12 +519,15 @@ class DimensionalModelRecommender:
         """
         try:
             # Create metadata.dimensional_model table if it doesn't exist
+            # Table is unique by (table_type, recommended_name, source_table)
+            # final_name can be updated by users to rename recommendations
             create_table_sql = """
             CREATE TABLE IF NOT EXISTS metadata.dimensional_model (
                 id UInt64,
                 recommendation_timestamp DateTime,
                 table_type String,
                 recommended_name String,
+                final_name String,
                 source_table String,
                 original_table_name String,
                 hierarchy_name String,
@@ -540,10 +543,20 @@ class DimensionalModelRecommender:
                 metadata_json String,
                 created_at DateTime DEFAULT now()
             ) ENGINE = ReplacingMergeTree()
-            ORDER BY (recommendation_timestamp, table_type, recommended_name)
+            ORDER BY (table_type, recommended_name, source_table)
             """
             
             self.db_manager.execute_command(create_table_sql)
+            
+            # Add final_name column if table exists but column doesn't (for existing tables)
+            # Try to add the column - it will fail if it already exists, which is fine
+            try:
+                alter_sql = "ALTER TABLE metadata.dimensional_model ADD COLUMN final_name String"
+                self.db_manager.execute_command(alter_sql)
+                logger.info("Added final_name column to existing table")
+            except Exception as e:
+                # Column likely already exists or table is new - that's fine
+                logger.debug(f"final_name column may already exist: {e}")
             
             # Truncate existing recommendations
             self.db_manager.execute_command("TRUNCATE TABLE metadata.dimensional_model")
@@ -554,17 +567,22 @@ class DimensionalModelRecommender:
                 column_details_json = [f"{col['column_name']}:{col['data_type']}:{col['classification']}" 
                                       for col in dim_table['columns']]
                 
+                # Initialize final_name with recommended_name
+                recommended_name = dim_table['recommended_name']
+                final_name = recommended_name  # Initially same as recommended_name
+                
                 insert_sql = f"""
                 INSERT INTO metadata.dimensional_model (
-                    id, recommendation_timestamp, table_type, recommended_name,
+                    id, recommendation_timestamp, table_type, recommended_name, final_name,
                     source_table, original_table_name, hierarchy_name,
                     root_column, leaf_column, columns, column_details,
                     total_columns, hierarchy_levels, metadata_json
                 ) VALUES (
-                    {hash(dim_table['recommended_name']) % 2**63},
+                    {hash(f"{recommended_name}_{dim_table['source_table']}") % 2**63},
                     '{recommendations['recommendation_timestamp']}',
                     'dimension',
-                    '{dim_table['recommended_name']}',
+                    '{recommended_name}',
+                    '{final_name}',
                     '{dim_table['source_table']}',
                     '{dim_table['original_table_name']}',
                     '{dim_table.get('hierarchy_name', '').replace("'", "''")}',
@@ -589,17 +607,22 @@ class DimensionalModelRecommender:
                 if isinstance(relationships_list, str):
                     relationships_list = [relationships_list]
                 
+                # Initialize final_name with recommended_name
+                recommended_name = fact_table['recommended_name']
+                final_name = recommended_name  # Initially same as recommended_name
+                
                 insert_sql = f"""
                 INSERT INTO metadata.dimensional_model (
-                    id, recommendation_timestamp, table_type, recommended_name,
+                    id, recommendation_timestamp, table_type, recommended_name, final_name,
                     source_table, original_table_name, fact_columns,
                     dimension_keys, columns, column_details, total_columns,
                     relationships, metadata_json
                 ) VALUES (
-                    {hash(fact_table['recommended_name']) % 2**63},
+                    {hash(f"{recommended_name}_{fact_table['source_table']}") % 2**63},
                     '{recommendations['recommendation_timestamp']}',
                     'fact',
-                    '{fact_table['recommended_name']}',
+                    '{recommended_name}',
+                    '{final_name}',
                     '{fact_table['source_table']}',
                     '{fact_table['original_table_name']}',
                     {repr(fact_table.get('fact_columns', []))},
