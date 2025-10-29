@@ -831,6 +831,111 @@ curl -X POST "http://localhost:8000/api/v1/model/analyze/all"
 }
 ```
 
+### **Dimensional Model Recommendations**
+
+#### **Generate Dimensional Model Recommendations**
+```bash
+# Generate recommendations based on ERD, hierarchy, and discover metadata
+curl -X POST "http://localhost:8000/api/v1/model/dimensional-model/recommend"
+```
+
+#### **Get Recommendations**
+```bash
+# Get all recommendations
+curl -X GET "http://localhost:8000/api/v1/model/dimensional-model/recommendations"
+
+# Get only dimension tables
+curl -X GET "http://localhost:8000/api/v1/model/dimensional-model/recommendations?table_type=dimension"
+
+# Get only fact tables
+curl -X GET "http://localhost:8000/api/v1/model/dimensional-model/recommendations?table_type=fact"
+
+# Get specific recommendation
+curl -X GET "http://localhost:8000/api/v1/model/dimensional-model/recommendations?recommended_name=dimension1_dim"
+```
+
+#### **Update Recommendation Names**
+```bash
+# Rename recommended table (e.g., dimension1_dim -> calendar_dim)
+curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendations" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "recommended_name": "dimension1_dim",
+    "new_table_name": "calendar_dim"
+  }'
+
+# Rename table and update column names
+curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendations" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "recommended_name": "dimension2_dim",
+    "new_table_name": "dealer_dim",
+    "new_column_names": {
+      "dealer_name": "dealer_nm",
+      "region": "region_name"
+    }
+  }'
+```
+
+#### **Recommendation Response Example**
+```json
+{
+  "status": "success",
+  "message": "Dimensional model recommendations generated",
+  "recommendation_timestamp": "2025-10-29 08:00:00",
+  "total_dimension_tables": 4,
+  "total_fact_tables": 1,
+  "stored": true,
+  "recommendations": {
+    "dimension_tables": [
+      {
+        "recommended_name": "dimension1_dim",
+        "source_table": "calendar_stage1",
+        "original_table_name": "calendar",
+        "hierarchy_name": "calendar_stage1_hierarchy",
+        "root_column": "is_weekend",
+        "leaf_column": "calendar_date",
+        "columns": [
+          {
+            "column_name": "calendar_date",
+            "data_type": "Date",
+            "classification": "dimension",
+            "cardinality": 6209
+          }
+        ],
+        "total_columns": 22,
+        "hierarchy_levels": 18
+      }
+    ],
+    "fact_tables": [
+      {
+        "recommended_name": "fact1_fact",
+        "source_table": "daily_sales_stage1",
+        "original_table_name": "daily_sales",
+        "fact_columns": ["sales_amount"],
+        "dimension_keys": ["dealer_name", "vehicle_model", "sales_date"],
+        "columns": [
+          {
+            "column_name": "sales_amount",
+            "data_type": "Decimal(15,2)",
+            "classification": "fact",
+            "cardinality": 0
+          }
+        ],
+        "total_columns": 1
+      }
+    ]
+  }
+}
+```
+
+**Note**: The recommendation engine:
+- Uses hierarchies to identify dimension tables (_dim suffix)
+- Uses ERD relationships to identify fact tables (_fact suffix)
+- Analyzes discover metadata for column classifications
+- Generates temporary names (dimension1_dim, fact1_fact) that can be updated
+- Stores recommendations in `metadata.dimensional_model` table
+
 ### **Model Phase Testing Tips**
 
 1. **Start with Status**: Always check `/api/v1/model/status` first to ensure the phase is active
@@ -1293,6 +1398,10 @@ curl -X POST "http://localhost:8000/api/v1/transform/transformations/non_existen
 - ✅ **Ignore Fields**: Configurable list of fields to exclude from ERD analysis (e.g., create_date)
 - ✅ **Hierarchy Update API**: PUT endpoint to update hierarchy metadata (hierarchy_name, root_column, leaf_column, parent_child_relationships, sibling_relationships)
 - ✅ **Clear Relationships**: Support for clearing relationship fields with empty arrays
+- ✅ **Dimensional Model Recommendation Engine**: Intelligent recommendations for gold schema fact and dimension tables
+- ✅ **Multi-Source Analysis**: Combines ERD, hierarchy, and discover metadata for intelligent recommendations
+- ✅ **Automatic Naming**: Generates temporary names (dimension1_dim, fact1_fact) for user review and customization
+- ✅ **Recommendation Storage**: Stores recommendations in metadata.dimensional_model for review and refinement
 
 ### **Bug Fixes**
 - Fixed `postgresql` vs `postgres` source type validation

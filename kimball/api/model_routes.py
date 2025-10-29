@@ -20,6 +20,7 @@ from datetime import datetime
 from ..model.erd_analyzer import ERDAnalyzer
 from ..model.hierarchy_analyzer import HierarchyAnalyzer
 from ..model.calendar_generator import CalendarGenerator
+from ..model.dimensional_model_recommender import DimensionalModelRecommender
 from ..core.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,12 @@ class CalendarGenerationRequest(BaseModel):
     """Request model for calendar dimension generation."""
     start_date: str  # Format: YYYY-MM-DD
     end_date: str    # Format: YYYY-MM-DD
+
+class DimensionalModelRecommendationUpdateRequest(BaseModel):
+    """Request model for updating dimensional model recommendations."""
+    recommended_name: str  # Current recommended name (e.g., dimension1_dim)
+    new_table_name: str    # New table name (e.g., calendar_dim)
+    new_column_names: Optional[Dict[str, str]] = None  # Map old_name -> new_name
 
 # Dependency for database manager
 def get_db_manager():
@@ -506,6 +513,227 @@ async def update_hierarchy(request: HierarchyEditRequest):
         raise
     except Exception as e:
         logger.error(f"Error updating hierarchy: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.post("/dimensional-model/recommend")
+async def generate_dimensional_model_recommendations():
+    """
+    Generate dimensional model recommendations based on ERD, hierarchy, and discover metadata.
+    
+    Analyzes metadata to recommend:
+    - Dimension tables (_dim suffix) based on hierarchies
+    - Fact tables (_fact suffix) based on ERD relationships
+    
+    Returns:
+        Dict[str, Any]: Dimensional model recommendations
+    """
+    try:
+        logger.info("Generating dimensional model recommendations...")
+        
+        # Initialize recommender
+        recommender = DimensionalModelRecommender()
+        
+        # Generate recommendations
+        recommendations = recommender.generate_recommendations()
+        
+        # Store recommendations
+        store_success = recommender.store_recommendations(recommendations)
+        
+        return {
+            "status": "success",
+            "message": "Dimensional model recommendations generated",
+            "recommendation_timestamp": recommendations['recommendation_timestamp'],
+            "total_dimension_tables": recommendations['total_dimension_tables'],
+            "total_fact_tables": recommendations['total_fact_tables'],
+            "stored": store_success,
+            "recommendations": recommendations
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating recommendations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.get("/dimensional-model/recommendations")
+async def get_dimensional_model_recommendations(
+    table_type: Optional[str] = None,
+    recommended_name: Optional[str] = None
+):
+    """
+    Get dimensional model recommendations from metadata.dimensional_model.
+    
+    Args:
+        table_type (Optional[str]): Filter by 'dimension' or 'fact'
+        recommended_name (Optional[str]): Filter by specific recommended name
+        
+    Returns:
+        Dict[str, Any]: Recommendations data
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # Build query
+        query = """
+        SELECT 
+            recommended_name,
+            table_type,
+            source_table,
+            original_table_name,
+            hierarchy_name,
+            root_column,
+            leaf_column,
+            fact_columns,
+            dimension_keys,
+            columns,
+            column_details,
+            total_columns,
+            hierarchy_levels,
+            relationships,
+            recommendation_timestamp,
+            metadata_json
+        FROM metadata.dimensional_model
+        """
+        
+        conditions = []
+        if table_type:
+            conditions.append(f"table_type = '{table_type}'")
+        if recommended_name:
+            conditions.append(f"recommended_name = '{recommended_name}'")
+        
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        
+        query += " ORDER BY table_type, recommended_name"
+        
+        results = db_manager.execute_query_dict(query)
+        
+        return {
+            "status": "success",
+            "message": "Recommendations retrieved",
+            "count": len(results),
+            "data": results
+        }
+        
+    except Exception as e:
+        logger.error(f"Error retrieving recommendations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.put("/dimensional-model/recommendations")
+async def update_dimensional_model_recommendation(request: DimensionalModelRecommendationUpdateRequest):
+    """
+    Update a dimensional model recommendation (table name and/or column names).
+    
+    This allows users to rename recommended tables (e.g., dimension1_dim -> calendar_dim)
+    and optionally rename columns.
+    
+    Args:
+        request: Update request with recommended_name, new_table_name, and optional new_column_names
+        
+    Returns:
+        Dict[str, Any]: Update results
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # Find the recommendation
+        find_query = f"""
+        SELECT recommended_name, table_type
+        FROM metadata.dimensional_model
+        WHERE recommended_name = '{request.recommended_name}'
+        ORDER BY recommendation_timestamp DESC
+        LIMIT 1
+        """
+        
+        existing = db_manager.execute_query_dict(find_query)
+        
+        if not existing:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Recommendation not found: {request.recommended_name}"
+            )
+        
+        # Prepare updates
+        escaped_new_name = request.new_table_name.replace("'", "''")
+        updates = [f"recommended_name = '{escaped_new_name}'"]
+        
+        # Update column names if provided
+        if request.new_column_names:
+            # Get current columns
+            current_query = f"""
+            SELECT columns, column_details
+            FROM metadata.dimensional_model
+            WHERE recommended_name = '{request.recommended_name}'
+            ORDER BY recommendation_timestamp DESC
+            LIMIT 1
+            """
+            current = db_manager.execute_query_dict(current_query)
+            
+            if current:
+                old_columns = current[0].get('columns', [])
+                old_details = current[0].get('column_details', [])
+                
+                # Apply column name mappings
+                new_columns = []
+                new_details = []
+                
+                for i, col in enumerate(old_columns):
+                    new_col_name = request.new_column_names.get(col, col)
+                    new_columns.append(new_col_name)
+                    
+                    # Update column details
+                    if i < len(old_details):
+                        detail = old_details[i]
+                        parts = detail.split(':')
+                        if len(parts) >= 2:
+                            # Format: column_name:data_type:classification
+                            new_detail = f"{new_col_name}:{':'.join(parts[1:])}"
+                            new_details.append(new_detail)
+                        else:
+                            new_details.append(detail)
+                    else:
+                        new_details.append(f"{new_col_name}:String:dimension")
+                
+                updates.append(f"columns = {repr(new_columns)}")
+                updates.append(f"column_details = {repr(new_details)}")
+        
+        # Use ALTER TABLE UPDATE
+        update_sql = f"""
+        ALTER TABLE metadata.dimensional_model
+        UPDATE {', '.join(updates)}
+        WHERE recommended_name = '{request.recommended_name}'
+        """
+        
+        try:
+            db_manager.execute_command(update_sql)
+            logger.info(f"Updated recommendation: {request.recommended_name} -> {request.new_table_name}")
+            
+            # Get updated record
+            updated_query = f"""
+            SELECT *
+            FROM metadata.dimensional_model
+            WHERE recommended_name = '{request.new_table_name}'
+            ORDER BY recommendation_timestamp DESC
+            LIMIT 1
+            """
+            
+            updated = db_manager.execute_query_dict(updated_query)
+            
+            return {
+                "status": "success",
+                "message": "Recommendation updated successfully",
+                "old_name": request.recommended_name,
+                "new_name": request.new_table_name,
+                "updated": True,
+                "recommendation": updated[0] if updated else None
+            }
+            
+        except Exception as e:
+            logger.error(f"Error updating recommendation: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to update recommendation: {str(e)}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating recommendation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @model_router.get("/erd/relationships")
