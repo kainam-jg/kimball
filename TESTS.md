@@ -973,6 +973,65 @@ curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendation
 - `recommended_name`: Original generated name (dimension1_dim) - never changes
 - `final_name`: User-defined name (calendar_dim) - can be updated
 
+#### **Generate Stage3 Transformations**
+```bash
+# Generate SQL transformations to create gold schema tables
+curl -X POST "http://localhost:8000/api/v1/model/dimensional-model/generate-transformations"
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Generated 4 stage3 transformations",
+  "transformations_created": 4,
+  "transformations": [
+    {
+      "transformation_name": "calendar_dim_transformation",
+      "transformation_id": 1,
+      "final_name": "calendar_dim",
+      "source_table": "calendar_stage1",
+      "table_type": "dimension",
+      "statements": 4
+    },
+    {
+      "transformation_name": "geography_dim_transformation",
+      "transformation_id": 2,
+      "final_name": "geography_dim",
+      "source_table": "dealer_regions_stage1",
+      "table_type": "dimension",
+      "statements": 4
+    },
+    {
+      "transformation_name": "product_dim_transformation",
+      "transformation_id": 3,
+      "final_name": "product_dim",
+      "source_table": "vehicles_stage1",
+      "table_type": "dimension",
+      "statements": 4
+    },
+    {
+      "transformation_name": "daily_sales_fact_transformation",
+      "transformation_id": 4,
+      "final_name": "daily_sales_fact",
+      "source_table": "daily_sales_stage1",
+      "table_type": "fact",
+      "statements": 4
+    }
+  ]
+}
+```
+
+**Note**: Stage3 transformations are stored in `metadata.transformation1` with:
+- `transformation_stage = 'stage3'`
+- Each transformation contains 4 SQL statements:
+  1. `DROP TABLE IF EXISTS gold.final_name`
+  2. `CREATE TABLE gold.final_name ... ENGINE = MergeTree() ORDER BY ...`
+  3. `INSERT INTO gold.final_name SELECT ... FROM silver.source_table`
+  4. `OPTIMIZE TABLE gold.final_name FINAL`
+- Column data types are extracted from source tables
+- ORDER BY is determined by table type (fact: dimension keys, dimension: root/leaf columns)
+
 ### **Model Phase Testing Tips**
 
 1. **Start with Status**: Always check `/api/v1/model/status` first to ensure the phase is active
@@ -1439,6 +1498,10 @@ curl -X POST "http://localhost:8000/api/v1/transform/transformations/non_existen
 - ✅ **Multi-Source Analysis**: Combines ERD, hierarchy, and discover metadata for intelligent recommendations
 - ✅ **Automatic Naming**: Generates temporary names (dimension1_dim, fact1_fact) for user review and customization
 - ✅ **Recommendation Storage**: Stores recommendations in metadata.dimensional_model for review and refinement
+- ✅ **Final Name Management**: final_name column allows user-defined table names while preserving recommended_name identifier
+- ✅ **Stage3 Transformation Generation**: Automatically generates SQL transformations to create gold schema tables from silver stage1
+- ✅ **Intelligent ORDER BY**: Fact tables ordered by dimension keys, dimension tables by root/leaf columns
+- ✅ **Complete SQL Generation**: DROP, CREATE, INSERT, and OPTIMIZE statements for each gold table
 
 ### **Bug Fixes**
 - Fixed `postgresql` vs `postgres` source type validation
