@@ -163,7 +163,7 @@ class DimensionalModelRecommender:
         
         return metadata
     
-    def identify_dimension_tables(self, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def identify_dimension_tables(self, metadata: Dict[str, Any], fact_table_names: Set[str]) -> List[Dict[str, Any]]:
         """
         Identify dimension tables based on hierarchies.
         
@@ -174,6 +174,7 @@ class DimensionalModelRecommender:
         
         Args:
             metadata: Analyzed metadata dictionary
+            fact_table_names: Set of table names that are identified as fact tables (to exclude)
             
         Returns:
             List of dimension table recommendations
@@ -182,6 +183,9 @@ class DimensionalModelRecommender:
         dim_counter = 1
         
         for table_name, hierarchy_info in metadata['hierarchies'].items():
+            # Skip tables that are identified as fact tables
+            if table_name in fact_table_names:
+                continue
             # Collect all columns that should be in this dimension
             dimension_columns = set()
             
@@ -309,19 +313,7 @@ class DimensionalModelRecommender:
                 original_table_name = table_name.replace('_stage1', '')
                 column_details = []
                 
-                # Add fact columns
-                if original_table_name in metadata['discover']:
-                    for col_info in metadata['discover'][original_table_name]:
-                        col_name = col_info.get('new_column_name') or col_info.get('original_column_name')
-                        if col_name in fact_columns:
-                            column_details.append({
-                                'column_name': col_name,
-                                'data_type': col_info.get('inferred_type', 'Decimal(15,2)'),
-                                'classification': 'fact',
-                                'cardinality': col_info.get('cardinality', 0)
-                            })
-                
-                # Also get fact columns directly from table structure
+                # Get all columns from table structure first
                 try:
                     structure_query = f"""
                     SELECT 
@@ -334,22 +326,18 @@ class DimensionalModelRecommender:
                     """
                     
                     structure_cols = self.db_manager.execute_query_dict(structure_query)
-                    
-                    for col in structure_cols:
-                        col_name = col['column_name']
-                        # Only include fact columns (measures)
-                        if self._is_fact_column(col['data_type'], col_name, table_name) and col_name not in [c['column_name'] for c in column_details]:
-                            column_details.append({
-                                'column_name': col_name,
-                                'data_type': col['data_type'],
-                                'classification': 'fact',
-                                'cardinality': 0
-                            })
                 except Exception as e:
                     logger.warning(f"Error getting column structure for {table_name}: {e}")
+                    structure_cols = []
                 
-                # Find dimension foreign keys from relationships
-                dimension_keys = []
+                # Find dimension foreign keys from relationships and ERD metadata
+                dimension_keys = set()
+                
+                # Get dimension columns from ERD metadata
+                if dimension_columns:
+                    dimension_keys.update(dimension_columns)
+                
+                # Parse relationships to find dimension keys
                 if relationships:
                     for rel in relationships:
                         # Relationships are stored as strings, need to parse
@@ -357,23 +345,74 @@ class DimensionalModelRecommender:
                         if isinstance(rel, str) and '->' in rel:
                             parts = rel.split('->')
                             if len(parts) == 2:
-                                dim_part = parts[1].strip()
-                                if '.' in dim_part:
-                                    dim_col = dim_part.split('.')[1].strip()
-                                    dimension_keys.append(dim_col)
+                                fact_part = parts[0].strip()
+                                if '.' in fact_part:
+                                    fact_col = fact_part.split('.')[1].strip()
+                                    # If this is a column from our fact table, it's a dimension key
+                                    if fact_col:
+                                        dimension_keys.add(fact_col)
                         elif isinstance(rel, dict):
                             # Relationship dict format
-                            if 'table2' in rel:
-                                dim_col = rel.get('column2', '')
-                                dimension_keys.append(dim_col)
+                            if 'table1' in rel and rel.get('table1') == table_name:
+                                fact_col = rel.get('column1', '')
+                                if fact_col:
+                                    dimension_keys.add(fact_col)
+                
+                # For fact tables, all non-fact columns should be dimension keys (foreign keys)
+                # Check table structure - any column that's not a fact is a dimension key
+                for col in structure_cols:
+                    col_name = col['column_name']
+                    # Skip fact columns (measures) - they're not dimension keys
+                    if not self._is_fact_column(col['data_type'], col_name, table_name):
+                        # For fact tables, any non-fact column is a dimension key
+                        dimension_keys.add(col_name)
+                
+                # Now build column_details: include both fact columns (measures) and dimension keys
+                
+                # Get data types from discover metadata if available
+                discover_col_types = {}
+                if original_table_name in metadata['discover']:
+                    for col_info in metadata['discover'][original_table_name]:
+                        col_name = col_info.get('new_column_name') or col_info.get('original_column_name')
+                        discover_col_types[col_name] = col_info.get('inferred_type', 'String')
+                
+                # Add fact columns (measures)
+                for col in structure_cols:
+                    col_name = col['column_name']
+                    if self._is_fact_column(col['data_type'], col_name, table_name):
+                        data_type = discover_col_types.get(col_name, col['data_type'])
+                        column_details.append({
+                            'column_name': col_name,
+                            'data_type': data_type,
+                            'classification': 'fact',
+                            'cardinality': 0
+                        })
+                
+                # Add dimension keys (foreign keys)
+                for col in structure_cols:
+                    col_name = col['column_name']
+                    if col_name in dimension_keys:
+                        # Make sure we haven't already added it as a fact column
+                        if col_name not in [c['column_name'] for c in column_details]:
+                            data_type = discover_col_types.get(col_name, col['data_type'])
+                            column_details.append({
+                                'column_name': col_name,
+                                'data_type': data_type,
+                                'classification': 'dimension_key',
+                                'cardinality': 0
+                            })
                 
                 # Create fact table recommendation
+                # Separate fact columns and dimension keys for clarity
+                fact_cols_list = [c['column_name'] for c in column_details if c['classification'] == 'fact']
+                dim_keys_list = [c['column_name'] for c in column_details if c['classification'] == 'dimension_key']
+                
                 fact_table = {
                     'recommended_name': f'fact{fact_counter}_fact',
                     'source_table': table_name,
                     'original_table_name': original_table_name,
-                    'fact_columns': [c['column_name'] for c in column_details],
-                    'dimension_keys': list(set(dimension_keys)),  # Remove duplicates
+                    'fact_columns': fact_cols_list,
+                    'dimension_keys': dim_keys_list,
                     'columns': sorted(column_details, key=lambda x: x['column_name']),
                     'total_columns': len(column_details),
                     'relationships': relationships
@@ -439,11 +478,14 @@ class DimensionalModelRecommender:
         # Analyze metadata
         metadata = self.analyze_metadata()
         
-        # Identify dimension tables from hierarchies
-        dimension_tables = self.identify_dimension_tables(metadata)
-        
-        # Identify fact tables from ERD
+        # Identify fact tables from ERD first
         fact_tables = self.identify_fact_tables(metadata)
+        
+        # Get set of fact table names to exclude from dimension recommendations
+        fact_table_names = {ft['source_table'] for ft in fact_tables}
+        
+        # Identify dimension tables from hierarchies (excluding fact tables)
+        dimension_tables = self.identify_dimension_tables(metadata, fact_table_names)
         
         recommendations = {
             'recommendation_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
