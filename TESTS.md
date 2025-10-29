@@ -868,32 +868,97 @@ curl -X PUT "http://localhost:8000/api/v1/model/erd/edit" \
   }'
 ```
 
-#### **Edit Hierarchy**
+#### **Update Hierarchy**
 ```bash
-curl -X PUT "http://localhost:8000/api/v1/model/hierarchies/edit" \
+# Update hierarchy for calendar_stage1
+curl -X PUT "http://localhost:8000/api/v1/model/hierarchies" \
   -H "Content-Type: application/json" \
   -d '{
-    "table_name": "dealers",
+    "table_name": "calendar_stage1",
+    "parent_child_relationships": [
+      "calendar_year -> calendar_qtr_name",
+      "calendar_qtr_name -> calendar_month_name",
+      "calendar_month_name -> calendar_week_name",
+      "calendar_week_name -> calendar_day_name"
+    ],
+    "sibling_relationships": [
+      "calendar_qtr_num <-> calendar_qtr_name",
+      "calendar_qtr_name <-> calendar_qtr_num",
+      "calendar_qtr_name <-> calendar_day_name",
+      "calendar_day <-> calendar_day_name",
+      "calendar_day_name <-> calendar_day",
+      "calendar_month_num <-> calendar_month_name",
+      "calendar_month_name <-> calendar_month_num",
+      "calendar_week_num <-> calendar_week_name",
+      "calendar_week_name <-> calendar_week_num",
+      "calendar_id <-> calendar_date",
+      "calendar_date <-> calendar_id"
+    ]
+  }'
+
+# Update hierarchy name and root/leaf columns
+curl -X PUT "http://localhost:8000/api/v1/model/hierarchies" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "table_name": "dealer_regions_stage1",
     "hierarchy_name": "geographic_hierarchy",
     "root_column": "region",
-    "leaf_column": "dealer_name",
-    "intermediate_levels": [
-      {
-        "level": 1,
-        "column_name": "region",
-        "cardinality": 5
-      },
-      {
-        "level": 2,
-        "column_name": "city",
-        "cardinality": 25
-      },
-      {
-        "level": 3,
-        "column_name": "dealer_name",
-        "cardinality": 100
-      }
-    ]
+    "leaf_column": "dealer_name"
+  }'
+```
+
+**Update Hierarchy Response:**
+```json
+{
+  "status": "success",
+  "message": "Hierarchy updated successfully",
+  "table_name": "calendar_stage1",
+  "updated": true,
+  "updated_fields": [
+    "parent_child_relationships",
+    "sibling_relationships"
+  ],
+  "hierarchy": {
+    "id": 2728721181210228689,
+    "table_name": "calendar_stage1",
+    "hierarchy_name": "calendar_stage1_hierarchy",
+    "root_column": "is_weekend",
+    "leaf_column": "calendar_date",
+    "parent_child_relationships": [
+      "calendar_year -> calendar_qtr_name",
+      "calendar_qtr_name -> calendar_month_name",
+      "calendar_month_name -> calendar_week_name",
+      "calendar_week_name -> calendar_day_name"
+    ],
+    "sibling_relationships": [
+      "calendar_qtr_num <-> calendar_qtr_name",
+      "calendar_qtr_name <-> calendar_qtr_num",
+      "calendar_qtr_name <-> calendar_day_name",
+      "calendar_day <-> calendar_day_name",
+      "calendar_day_name <-> calendar_day",
+      "calendar_month_num <-> calendar_month_name",
+      "calendar_month_name <-> calendar_month_num",
+      "calendar_week_num <-> calendar_week_name",
+      "calendar_week_name <-> calendar_week_num",
+      "calendar_id <-> calendar_date",
+      "calendar_date <-> calendar_id"
+    ],
+    "analysis_timestamp": "2025-10-29T07:43:37+00:00"
+  }
+}
+```
+
+**Note:** 
+- All provided fields will fully replace existing values. Only include fields you want to update.
+- To clear `parent_child_relationships` or `sibling_relationships`, send an empty array: `[]`
+- Example: Clear relationships for daily_sales_stage1:
+```bash
+curl -X PUT "http://localhost:8000/api/v1/model/hierarchies" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "table_name": "daily_sales_stage1",
+    "parent_child_relationships": [],
+    "sibling_relationships": []
   }'
 ```
 
@@ -1226,6 +1291,8 @@ curl -X POST "http://localhost:8000/api/v1/transform/transformations/non_existen
 - ✅ **Data-Based ERD Analysis**: Find relationships based on actual data overlap, not column names
 - ✅ **Confidence Threshold**: Configurable 0.8 threshold for relationship detection
 - ✅ **Ignore Fields**: Configurable list of fields to exclude from ERD analysis (e.g., create_date)
+- ✅ **Hierarchy Update API**: PUT endpoint to update hierarchy metadata (hierarchy_name, root_column, leaf_column, parent_child_relationships, sibling_relationships)
+- ✅ **Clear Relationships**: Support for clearing relationship fields with empty arrays
 
 ### **Bug Fixes**
 - Fixed `postgresql` vs `postgres` source type validation

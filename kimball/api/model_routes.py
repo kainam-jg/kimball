@@ -69,10 +69,8 @@ class HierarchyEditRequest(BaseModel):
     hierarchy_name: Optional[str] = None
     root_column: Optional[str] = None
     leaf_column: Optional[str] = None
-    intermediate_levels: Optional[List[Dict[str, Any]]] = None
-    parent_child_relationships: Optional[List[Dict[str, Any]]] = None
-    sibling_relationships: Optional[List[Dict[str, Any]]] = None
-    cross_hierarchy_relationships: Optional[List[Dict[str, Any]]] = None
+    parent_child_relationships: Optional[List[str]] = None  # Array of "parent -> child" strings
+    sibling_relationships: Optional[List[str]] = None  # Array of "col1 <-> col2" strings
 
 class HierarchyCreateRequest(BaseModel):
     """Request model for creating custom hierarchies."""
@@ -380,6 +378,134 @@ async def get_hierarchy_metadata(table_name: Optional[str] = None, limit: int = 
         
     except Exception as e:
         logger.error(f"Error retrieving hierarchy metadata: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.put("/hierarchies")
+async def update_hierarchy(request: HierarchyEditRequest):
+    """
+    Update hierarchy metadata in the metadata.hierarchies table.
+    
+    Updates the most recent hierarchy record for the specified table_name.
+    Only provided fields will be updated.
+    
+    Args:
+        request (HierarchyEditRequest): Hierarchy update parameters
+        
+    Returns:
+        Dict[str, Any]: Update results
+    """
+    try:
+        db_manager = DatabaseManager()
+        
+        # First, find the hierarchy record to update
+        # Get the most recent hierarchy for this table
+        find_query = f"""
+        SELECT 
+            id,
+            table_name,
+            hierarchy_name,
+            root_column,
+            leaf_column,
+            parent_child_relationships,
+            sibling_relationships
+        FROM metadata.hierarchies
+        WHERE table_name = '{request.table_name}'
+        ORDER BY analysis_timestamp DESC
+        LIMIT 1
+        """
+        
+        existing = db_manager.execute_query_dict(find_query)
+        
+        if not existing:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"No hierarchy found for table: {request.table_name}"
+            )
+        
+        existing_record = existing[0]
+        hierarchy_id = existing_record['id']
+        
+        # Prepare update fields
+        updates = []
+        
+        if request.hierarchy_name is not None:
+            escaped_name = request.hierarchy_name.replace("'", "''")
+            updates.append(f"hierarchy_name = '{escaped_name}'")
+        
+        if request.root_column is not None:
+            escaped_root = request.root_column.replace("'", "''")
+            updates.append(f"root_column = '{escaped_root}'")
+        
+        if request.leaf_column is not None:
+            escaped_leaf = request.leaf_column.replace("'", "''")
+            updates.append(f"leaf_column = '{escaped_leaf}'")
+        
+        if request.parent_child_relationships is not None:
+            # Convert list to ClickHouse Array format
+            escaped_rels = [rel.replace("'", "''") for rel in request.parent_child_relationships]
+            relationships_str = "[" + ", ".join([f"'{rel}'" for rel in escaped_rels]) + "]"
+            updates.append(f"parent_child_relationships = {relationships_str}")
+        
+        if request.sibling_relationships is not None:
+            # Convert list to ClickHouse Array format
+            escaped_sibs = [sib.replace("'", "''") for sib in request.sibling_relationships]
+            siblings_str = "[" + ", ".join([f"'{sib}'" for sib in escaped_sibs]) + "]"
+            updates.append(f"sibling_relationships = {siblings_str}")
+        
+        if not updates:
+            return {
+                "status": "success",
+                "message": "No fields to update",
+                "table_name": request.table_name,
+                "updated": False
+            }
+        
+        # Use ALTER TABLE UPDATE for ClickHouse
+        # Note: ClickHouse ALTER UPDATE requires the WHERE clause
+        update_sql = f"""
+        ALTER TABLE metadata.hierarchies
+        UPDATE {', '.join(updates)}
+        WHERE id = {hierarchy_id}
+        """
+        
+        try:
+            db_manager.execute_command(update_sql)
+            logger.info(f"Updated hierarchy for table: {request.table_name}")
+            
+            # Get updated record
+            updated_query = f"""
+            SELECT 
+                id,
+                table_name,
+                hierarchy_name,
+                root_column,
+                leaf_column,
+                parent_child_relationships,
+                sibling_relationships,
+                analysis_timestamp
+            FROM metadata.hierarchies
+            WHERE id = {hierarchy_id}
+            """
+            
+            updated = db_manager.execute_query_dict(updated_query)
+            
+            return {
+                "status": "success",
+                "message": "Hierarchy updated successfully",
+                "table_name": request.table_name,
+                "updated": True,
+                "updated_fields": [upd.split('=')[0].strip() for upd in updates],
+                "hierarchy": updated[0] if updated else None
+            }
+            
+        except Exception as e:
+            logger.error(f"Error updating hierarchy: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to update hierarchy: {str(e)}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating hierarchy: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @model_router.get("/erd/relationships")
