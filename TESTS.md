@@ -1222,6 +1222,10 @@ curl -X POST "http://localhost:8000/api/v1/transform/transformations/non_existen
 - ✅ **Bulk Loading**: High-performance bulk insert using client.insert_df() (~128 records/sec)
 - ✅ **Clean Generation**: Drop table before generation to prevent data accumulation
 - ✅ **Performance Optimized**: 6,209 records in <1 second vs row-wise inserts
+- ✅ **Hierarchy Analyzer**: Direct system.columns queries for all _stage1 tables
+- ✅ **Data-Based ERD Analysis**: Find relationships based on actual data overlap, not column names
+- ✅ **Confidence Threshold**: Configurable 0.8 threshold for relationship detection
+- ✅ **Ignore Fields**: Configurable list of fields to exclude from ERD analysis (e.g., create_date)
 
 ### **Bug Fixes**
 - Fixed `postgresql` vs `postgres` source type validation

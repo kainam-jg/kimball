@@ -88,11 +88,6 @@ class HierarchyAnalyzer:
                 
                 columns = self.db_manager.execute_query_dict(structure_query)
                 
-                # Get row count for cardinality calculations
-                count_query = f"SELECT COUNT(*) as row_count FROM silver.{table_name}"
-                count_result = self.db_manager.execute_query_dict(count_query)
-                total_rows = count_result[0]['row_count'] if count_result else 0
-                
                 # Original table name (remove _stage1 suffix)
                 original_table_name = table_name.replace('_stage1', '')
                 
