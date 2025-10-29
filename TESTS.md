@@ -427,6 +427,8 @@ curl -X GET "http://localhost:8000/api/v1/transform/transformations/calendar_dim
 
 ### **Create Multi-Statement Transformations**
 
+**Note**: Stage1 transformations are stored in `metadata.transformation1` table based on the `transformation_stage: "stage1"` parameter. The system automatically routes to the correct transformation table based on the stage value.
+
 #### **Create dealer_regions_stage1 Transformation** ✅ **WORKING**
 ```bash
 curl -X POST "http://localhost:8000/api/v1/transform/transformations" \
@@ -592,15 +594,31 @@ curl -X PUT "http://localhost:8000/api/v1/transform/transformations/daily_sales_
 
 #### **Execute Single Transformation**
 ```bash
+# Execute stage1 transformation (stage parameter optional - engine will find it)
 curl -X POST "http://localhost:8000/api/v1/transform/transformations/daily_sales_stage1/execute"
+
+# Execute stage1 transformation with explicit stage (faster)
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/daily_sales_stage1/execute?stage=stage1"
+
+# Execute stage3 transformation with explicit stage
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/geography_dim_transformation/execute?stage=stage3"
 ```
 
 #### **Execute Multiple Transformations in Parallel**
 ```bash
+# Execute stage1 transformations in parallel (stage optional - will search for each)
 curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/parallel" \
   -H "Content-Type: application/json" \
   -d '{
     "transformation_names": ["dealer_regions_stage1", "vehicles_stage1", "daily_sales_stage1"]
+  }'
+
+# Execute stage1 transformations in parallel with explicit stage (faster)
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/parallel" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "transformation_names": ["dealer_regions_stage1", "vehicles_stage1", "daily_sales_stage1"],
+    "stage": "stage1"
   }'
 ```
 
