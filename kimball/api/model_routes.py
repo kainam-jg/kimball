@@ -32,7 +32,7 @@ class ERDAnalysisRequest(BaseModel):
     """Request model for ERD analysis."""
     schema_name: str = "silver"
     include_relationships: bool = True
-    min_confidence: float = 0.5
+    min_confidence: float = 0.8
 
 class HierarchyAnalysisRequest(BaseModel):
     """Request model for hierarchy analysis."""
@@ -172,7 +172,7 @@ async def analyze_erd(request: ERDAnalysisRequest):
         # Truncate ERD metadata table before analysis
         db_manager = DatabaseManager()
         try:
-            db_manager.execute_query("TRUNCATE TABLE metadata.erd")
+            db_manager.execute_command("TRUNCATE TABLE metadata.erd")
             logger.info("Truncated metadata.erd table")
         except Exception as e:
             logger.warning(f"Could not truncate metadata.erd table: {e}")
@@ -180,15 +180,8 @@ async def analyze_erd(request: ERDAnalysisRequest):
         # Initialize ERD analyzer
         erd_analyzer = ERDAnalyzer()
         
-        # Generate ERD metadata
-        erd_metadata = erd_analyzer.generate_erd_metadata()
-        
-        # Filter relationships by confidence if specified
-        if request.min_confidence > 0:
-            erd_metadata['relationships'] = [
-                rel for rel in erd_metadata['relationships']
-                if rel['join_confidence'] >= request.min_confidence
-            ]
+        # Generate ERD metadata with confidence threshold (default 0.8)
+        erd_metadata = erd_analyzer.generate_erd_metadata(confidence_threshold=request.min_confidence)
         
         # Store metadata if analysis was successful
         if erd_metadata['total_tables'] > 0:

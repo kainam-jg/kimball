@@ -343,70 +343,123 @@ class ERDAnalyzer:
         
         return max(0.0, min(1.0, score))
     
-    def find_join_relationships(self) -> List[Dict[str, Any]]:
+    def find_join_relationships(self, confidence_threshold: float = 0.8) -> List[Dict[str, Any]]:
         """
-        Find potential join relationships between Stage 1 tables.
+        Find potential join relationships between Stage 1 tables based on data overlap.
         
+        This method compares distinct value sets across columns in different tables
+        to find relationships based on actual data overlap, not column names.
+        
+        Args:
+            confidence_threshold (float): Minimum confidence threshold (default: 0.8)
+            
         Returns:
             List[Dict[str, Any]]: List of potential join relationships
         """
         relationships = []
         
-        # Get all primary key candidates
-        pk_candidates = {}
-        for table_name, metadata in self.table_metadata.items():
-            pk_candidates[table_name] = [
-                col for col in metadata['columns'] 
-                if col['is_primary_key_candidate']
-            ]
+        # Get distinct values for each column in each table
+        column_distinct_values = {}
         
-        # Look for common column names and types
-        column_info = defaultdict(list)
         for table_name, metadata in self.table_metadata.items():
             for col in metadata['columns']:
-                col_name = col['column_name'].lower()
-                column_info[col_name].append({
-                    'table': table_name,
-                    'column': col['column_name'],
-                    'type': col['data_type'],
-                    'cardinality': col['cardinality'],
-                    'is_pk_candidate': col['is_primary_key_candidate'],
-                    'classification': col['classification']
-                })
-        
-        # Find columns that appear in multiple tables
-        for col_name, occurrences in column_info.items():
-            if len(occurrences) > 1:
+                col_name = col['column_name']
+                
                 # Skip ignored fields
-                if col_name in self.ignore_join_fields:
+                if col_name.lower() in self.ignore_join_fields:
                     logger.debug(f"Skipping ignored field '{col_name}' for join relationships")
                     continue
                 
-                # Check if types are compatible
-                for i, occ1 in enumerate(occurrences):
-                    for j, occ2 in enumerate(occurrences[i+1:], i+1):
-                        if self._are_types_compatible(occ1['type'], occ2['type']):
-                            relationship = {
-                                'table1': occ1['table'],
-                                'column1': occ1['column'],
-                                'table2': occ2['table'],
-                                'column2': occ2['column'],
-                                'type1': occ1['type'],
-                                'type2': occ2['type'],
-                                'cardinality1': occ1['cardinality'],
-                                'cardinality2': occ2['cardinality'],
-                                'is_pk1': occ1['is_pk_candidate'],
-                                'is_pk2': occ2['is_pk_candidate'],
-                                'classification1': occ1['classification'],
-                                'classification2': occ2['classification'],
-                                'join_confidence': self._calculate_join_confidence(occ1, occ2),
-                                'relationship_type': self._determine_relationship_type(occ1, occ2)
-                            }
-                            relationships.append(relationship)
+                # Skip low cardinality columns (not useful for joins)
+                if col['cardinality'] < 2:
+                    continue
+                
+                # Get distinct values for this column
+                try:
+                    distinct_query = f"SELECT DISTINCT `{col_name}` as value FROM silver.{table_name} WHERE `{col_name}` IS NOT NULL"
+                    result = self.db_manager.execute_query_dict(distinct_query)
+                    distinct_values = {str(row['value']) for row in result if row.get('value') is not None}
+                    
+                    if distinct_values:
+                        column_distinct_values[(table_name, col_name)] = {
+                            'values': distinct_values,
+                            'count': len(distinct_values),
+                            'type': col['data_type'],
+                            'cardinality': col['cardinality'],
+                            'is_pk_candidate': col['is_primary_key_candidate'],
+                            'classification': col['classification']
+                        }
+                        logger.debug(f"Got {len(distinct_values)} distinct values for {table_name}.{col_name}")
+                except Exception as e:
+                    logger.warning(f"Error getting distinct values for {table_name}.{col_name}: {e}")
+                    continue
         
-        # Sort by join confidence
+        # Compare distinct value sets across different tables
+        column_keys = list(column_distinct_values.keys())
+        
+        for i, (table1, col1) in enumerate(column_keys):
+            col1_info = column_distinct_values[(table1, col1)]
+            
+            for j, (table2, col2) in enumerate(column_keys[i+1:], i+1):
+                # Only compare columns from different tables
+                if table1 == table2:
+                    continue
+                
+                col2_info = column_distinct_values[(table2, col2)]
+                
+                # Check if types are compatible
+                if not self._are_types_compatible(col1_info['type'], col2_info['type']):
+                    continue
+                
+                # Calculate overlap
+                overlap = col1_info['values'] & col2_info['values']
+                overlap_count = len(overlap)
+                
+                if overlap_count == 0:
+                    continue
+                
+                # Calculate confidence based on overlap
+                # Confidence = (overlap / min(distinct_count1, distinct_count2))
+                min_cardinality = min(col1_info['count'], col2_info['count'])
+                confidence = overlap_count / min_cardinality if min_cardinality > 0 else 0.0
+                
+                # Apply threshold
+                if confidence < confidence_threshold:
+                    continue
+                
+                # Determine relationship type
+                relationship_type = self._determine_relationship_type_data_based(
+                    col1_info, col2_info, overlap_count, col1_info['count'], col2_info['count']
+                )
+                
+                relationship = {
+                    'table1': table1,
+                    'column1': col1,
+                    'table2': table2,
+                    'column2': col2,
+                    'type1': col1_info['type'],
+                    'type2': col2_info['type'],
+                    'cardinality1': col1_info['count'],
+                    'cardinality2': col2_info['count'],
+                    'is_pk1': col1_info['is_pk_candidate'],
+                    'is_pk2': col2_info['is_pk_candidate'],
+                    'classification1': col1_info['classification'],
+                    'classification2': col2_info['classification'],
+                    'overlap_count': overlap_count,
+                    'overlap_percentage': round(confidence * 100, 2),
+                    'join_confidence': round(confidence, 4),
+                    'relationship_type': relationship_type
+                }
+                relationships.append(relationship)
+                
+                logger.debug(f"Found relationship: {table1}.{col1} <-> {table2}.{col2} "
+                           f"(confidence: {confidence:.2%}, overlap: {overlap_count})")
+        
+        # Sort by join confidence (descending)
         relationships.sort(key=lambda x: x['join_confidence'], reverse=True)
         self.erd_relationships = relationships
+        
+        logger.info(f"Found {len(relationships)} relationships above {confidence_threshold:.0%} confidence threshold")
         
         return relationships
     
@@ -495,9 +548,46 @@ class ERDAnalyzer:
         # Otherwise, many-to-many
         return 'many_to_many'
     
-    def generate_erd_metadata(self) -> Dict[str, Any]:
+    def _determine_relationship_type_data_based(self, col1_info: Dict[str, Any], col2_info: Dict[str, Any],
+                                               overlap_count: int, count1: int, count2: int) -> str:
+        """
+        Determine relationship type based on actual data overlap analysis.
+        
+        Args:
+            col1_info (Dict[str, Any]): First column info with distinct values
+            col2_info (Dict[str, Any]): Second column info with distinct values
+            overlap_count (int): Number of overlapping distinct values
+            count1 (int): Distinct count for column 1
+            count2 (int): Distinct count for column 2
+            
+        Returns:
+            str: Relationship type ('one_to_one', 'one_to_many', 'many_to_many')
+        """
+        # If both are primary key candidates and overlap is high, likely one-to-one
+        if col1_info['is_pk_candidate'] and col2_info['is_pk_candidate']:
+            if overlap_count == count1 == count2:
+                return 'one_to_one'
+            elif overlap_count == min(count1, count2):
+                return 'one_to_one'
+        
+        # If one is primary key candidate, likely one-to-many
+        if col1_info['is_pk_candidate'] or col2_info['is_pk_candidate']:
+            if overlap_count == min(count1, count2):
+                return 'one_to_many'
+        
+        # If overlap equals minimum cardinality, it's likely one-to-many
+        if overlap_count == min(count1, count2):
+            return 'one_to_many'
+        
+        # Otherwise, many-to-many
+        return 'many_to_many'
+    
+    def generate_erd_metadata(self, confidence_threshold: float = 0.8) -> Dict[str, Any]:
         """
         Generate comprehensive ERD metadata for all Stage 1 tables.
+        
+        Args:
+            confidence_threshold (float): Minimum confidence threshold for relationships (default: 0.8)
         
         Returns:
             Dict[str, Any]: Complete ERD metadata
@@ -508,8 +598,8 @@ class ERDAnalyzer:
         for table_name in self.stage1_tables:
             self.analyze_table_metadata(table_name)
         
-        # Find join relationships
-        relationships = self.find_join_relationships()
+        # Find join relationships with confidence threshold
+        relationships = self.find_join_relationships(confidence_threshold=confidence_threshold)
         
         # Generate ERD metadata
         erd_metadata = {
