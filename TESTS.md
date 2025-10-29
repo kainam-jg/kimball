@@ -390,10 +390,10 @@ curl -X POST "http://localhost:8000/api/v1/discover/learn/correction" \
 ### **Multi-Statement Transformations** ✅ **WORKING**
 
 **Important**: Transformations are stored in separate tables based on stage:
-- `metadata.transformation1` → stage1 transformations
-- `metadata.transformation2` → stage2 transformations  
-- `metadata.transformation3` → stage3 transformations
-- `metadata.transformation4` → stage4 transformations
+- `metadata.transformation1` → stage1 transformations (bronze to silver)
+- `metadata.transformation2` → stage2 transformations (silver to silver)
+- `metadata.transformation3` → stage3 transformations (silver to gold star schema)
+- `metadata.transformation4` → stage4 transformations (gold star schema to One Big Table)
 
 All tables use the same schema and are automatically created when needed.
 
@@ -1108,6 +1108,83 @@ curl -X POST "http://localhost:8000/api/v1/model/dimensional-model/generate-tran
 - Column data types are extracted from source tables
 - ORDER BY is determined by table type (fact: dimension keys, dimension: root/leaf columns)
 - Table is automatically created if it doesn't exist
+
+### **Stage4 Transformations - One Big Table (OBT)** ✅ **NEW**
+
+Stage4 transformations create One Big Table (OBT) degenerated star tables from the gold star schema. These tables always have the `_k` suffix and contain all dimension columns denormalized into a single table.
+
+#### **Create Stage4 OBT Transformation**
+```bash
+curl -X POST "http://localhost:8000/api/v1/transform/transformations" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "transformation_stage": "stage4",
+    "transformation_id": "daily_sales_k",
+    "statements": [
+      {
+        "transformation_id": "daily_sales_k",
+        "execution_sequence": 1,
+        "sql_statement": "DROP TABLE IF EXISTS gold.daily_sales_k;",
+        "statement_type": "DROP",
+        "description": "Drop existing One Big Table if it exists"
+      },
+      {
+        "transformation_id": "daily_sales_k",
+        "execution_sequence": 2,
+        "sql_statement": "CREATE TABLE gold.daily_sales_k (sales_amount Decimal(15, 2), calendar_id UInt32, calendar_date Date, calendar_year UInt16, calendar_year_qtr String, calendar_qtr_num UInt8, calendar_qtr_name String, calendar_year_month String, calendar_month_num UInt8, calendar_month_name String, calendar_year_week String, calendar_week_num UInt8, calendar_week_name String, calendar_day UInt8, calendar_day_name String, is_weekend UInt8, day_of_month UInt8, days_in_month UInt8, holiday_name String, holiday_flag String, working UInt8, working_day UInt8, working_days UInt8, region String, district String, country_name String, city_name String, dealer_name String, vehicle_class String, vehicle_type String, vehicle_model String, create_date Date) ENGINE = MergeTree() PARTITION BY toStartOfYear(calendar_date) ORDER BY (calendar_date, dealer_name, vehicle_model);",
+        "statement_type": "CREATE",
+        "description": "Create One Big Table with all dimension columns denormalized"
+      },
+      {
+        "transformation_id": "daily_sales_k",
+        "execution_sequence": 3,
+        "sql_statement": "INSERT INTO gold.daily_sales_k SELECT f.sales_amount, c.calendar_id, c.calendar_date, c.calendar_year, c.calendar_year_qtr, c.calendar_qtr_num, c.calendar_qtr_name, c.calendar_year_month, c.calendar_month_num, c.calendar_month_name, c.calendar_year_week, c.calendar_week_num, c.calendar_week_name, c.calendar_day, c.calendar_day_name, c.is_weekend, c.day_of_month, c.days_in_month, c.holiday_name, c.holiday_flag, c.working, c.working_day, c.working_days, g.region, g.district, g.country_name, g.city_name, g.dealer_name, p.vehicle_class, p.vehicle_type, p.vehicle_model, f.create_date FROM gold.daily_sales_fact f LEFT JOIN gold.calendar_dim c ON f.sales_date = c.calendar_date LEFT JOIN gold.geography_dim g ON f.dealer_name = g.dealer_name LEFT JOIN gold.product_dim p ON f.vehicle_model = p.vehicle_model;",
+        "statement_type": "INSERT",
+        "description": "Insert denormalized data from star schema into One Big Table"
+      },
+      {
+        "transformation_id": "daily_sales_k",
+        "execution_sequence": 4,
+        "sql_statement": "OPTIMIZE TABLE gold.daily_sales_k FINAL;",
+        "statement_type": "OPTIMIZE",
+        "description": "Optimize One Big Table for better performance"
+      }
+    ],
+    "source_schema": "gold",
+    "source_table": "star_schema",
+    "target_schema": "gold",
+    "target_table": "daily_sales_k",
+    "execution_frequency": "daily"
+  }'
+```
+
+#### **Execute Stage4 Transformations**
+```bash
+# Execute all stage4 transformations in parallel (default)
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/stage/stage4"
+
+# Execute all stage4 transformations sequentially
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/stage/stage4?parallel=false"
+
+# Execute specific stage4 transformation
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/daily_sales_k/execute?stage=stage4"
+```
+
+#### **Stage4 Transformation Features**
+- **One Big Table (OBT)**: Creates denormalized tables with `_k` suffix
+- **Denormalized Schema**: All dimension columns included in single table
+- **Star Schema Source**: Joins fact table with all dimension tables
+- **Performance Optimized**: Partitioned by date, ordered by key columns
+- **Complete Data**: Includes all calendar, geography, and product attributes
+
+**Note**: Stage4 transformations are stored in `metadata.transformation4`:
+- Each transformation contains 4 SQL statements:
+  1. `DROP TABLE IF EXISTS gold.table_name_k`
+  2. `CREATE TABLE gold.table_name_k ... ENGINE = MergeTree() ...`
+  3. `INSERT INTO gold.table_name_k SELECT ... FROM gold.fact_table LEFT JOIN ...`
+  4. `OPTIMIZE TABLE gold.table_name_k FINAL`
+- Tables are partitioned by date for optimal performance
+- All dimension columns are denormalized into the fact table
 
 ### **Model Phase Testing Tips**
 
