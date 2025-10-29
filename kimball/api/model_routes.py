@@ -651,62 +651,114 @@ async def update_dimensional_model_recommendation(request: DimensionalModelRecom
                 detail=f"Recommendation not found: {request.recommended_name}"
             )
         
-        # Prepare updates
+        # Get the full existing record
+        get_full_query = f"""
+        SELECT *
+        FROM metadata.dimensional_model
+        WHERE recommended_name = '{request.recommended_name}'
+        ORDER BY recommendation_timestamp DESC
+        LIMIT 1
+        """
+        
+        existing_record = db_manager.execute_query_dict(get_full_query)
+        
+        if not existing_record:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Recommendation not found: {request.recommended_name}"
+            )
+        
+        record = existing_record[0]
+        
+        # Prepare new values
         escaped_new_name = request.new_table_name.replace("'", "''")
-        updates = [f"recommended_name = '{escaped_new_name}'"]
+        new_columns = record.get('columns', [])
+        new_column_details = record.get('column_details', [])
         
         # Update column names if provided
         if request.new_column_names:
-            # Get current columns
-            current_query = f"""
-            SELECT columns, column_details
-            FROM metadata.dimensional_model
-            WHERE recommended_name = '{request.recommended_name}'
-            ORDER BY recommendation_timestamp DESC
-            LIMIT 1
-            """
-            current = db_manager.execute_query_dict(current_query)
+            old_columns = record.get('columns', [])
+            old_details = record.get('column_details', [])
             
-            if current:
-                old_columns = current[0].get('columns', [])
-                old_details = current[0].get('column_details', [])
+            # Apply column name mappings
+            new_columns = []
+            new_column_details = []
+            
+            for i, col in enumerate(old_columns):
+                new_col_name = request.new_column_names.get(col, col)
+                new_columns.append(new_col_name)
                 
-                # Apply column name mappings
-                new_columns = []
-                new_details = []
-                
-                for i, col in enumerate(old_columns):
-                    new_col_name = request.new_column_names.get(col, col)
-                    new_columns.append(new_col_name)
-                    
-                    # Update column details
-                    if i < len(old_details):
-                        detail = old_details[i]
-                        parts = detail.split(':')
-                        if len(parts) >= 2:
-                            # Format: column_name:data_type:classification
-                            new_detail = f"{new_col_name}:{':'.join(parts[1:])}"
-                            new_details.append(new_detail)
-                        else:
-                            new_details.append(detail)
+                # Update column details
+                if i < len(old_details):
+                    detail = old_details[i]
+                    parts = detail.split(':')
+                    if len(parts) >= 2:
+                        # Format: column_name:data_type:classification
+                        new_detail = f"{new_col_name}:{':'.join(parts[1:])}"
+                        new_column_details.append(new_detail)
                     else:
-                        new_details.append(f"{new_col_name}:String:dimension")
-                
-                updates.append(f"columns = {repr(new_columns)}")
-                updates.append(f"column_details = {repr(new_details)}")
+                        new_column_details.append(detail)
+                else:
+                    new_column_details.append(f"{new_col_name}:String:dimension")
         
-        # Use ALTER TABLE UPDATE
-        update_sql = f"""
-        ALTER TABLE metadata.dimensional_model
-        UPDATE {', '.join(updates)}
-        WHERE recommended_name = '{request.recommended_name}'
-        """
+        # Prepare INSERT with new name and updated timestamp
+        # Since recommended_name is a key column, we INSERT a new record
+        current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Build INSERT statement based on table type
+        if record.get('table_type') == 'dimension':
+            insert_sql = f"""
+            INSERT INTO metadata.dimensional_model (
+                id, recommendation_timestamp, table_type, recommended_name,
+                source_table, original_table_name, hierarchy_name,
+                root_column, leaf_column, columns, column_details,
+                total_columns, hierarchy_levels, metadata_json
+            ) VALUES (
+                {hash(request.new_table_name) % 2**63},
+                '{current_timestamp}',
+                'dimension',
+                '{escaped_new_name}',
+                '{record.get('source_table', '').replace("'", "''")}',
+                '{record.get('original_table_name', '').replace("'", "''")}',
+                '{record.get('hierarchy_name', '').replace("'", "''")}',
+                '{record.get('root_column', '').replace("'", "''")}',
+                '{record.get('leaf_column', '').replace("'", "''")}',
+                {repr(new_columns)},
+                {repr(new_column_details)},
+                {record.get('total_columns', 0)},
+                {record.get('hierarchy_levels', 0)},
+                '{str(record).replace("'", "''")[:1000]}'
+            )
+            """
+        else:  # fact table
+            insert_sql = f"""
+            INSERT INTO metadata.dimensional_model (
+                id, recommendation_timestamp, table_type, recommended_name,
+                source_table, original_table_name, fact_columns,
+                dimension_keys, columns, column_details, total_columns,
+                relationships, metadata_json
+            ) VALUES (
+                {hash(request.new_table_name) % 2**63},
+                '{current_timestamp}',
+                'fact',
+                '{escaped_new_name}',
+                '{record.get('source_table', '').replace("'", "''")}',
+                '{record.get('original_table_name', '').replace("'", "''")}',
+                {repr(record.get('fact_columns', []))},
+                {repr(record.get('dimension_keys', []))},
+                {repr(new_columns)},
+                {repr(new_column_details)},
+                {record.get('total_columns', 0)},
+                {repr(record.get('relationships', []))},
+                '{str(record).replace("'", "''")[:1000]}'
+            )
+            """
         
         try:
-            db_manager.execute_command(update_sql)
+            db_manager.execute_command(insert_sql)
             logger.info(f"Updated recommendation: {request.recommended_name} -> {request.new_table_name}")
             
-            # Get updated record
+            # Get the new record
             updated_query = f"""
             SELECT *
             FROM metadata.dimensional_model
