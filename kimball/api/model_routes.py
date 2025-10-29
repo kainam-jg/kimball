@@ -750,6 +750,35 @@ async def update_dimensional_model_recommendation(request: DimensionalModelRecom
         logger.error(f"Error updating recommendation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@model_router.post("/dimensional-model/generate-transformations")
+async def generate_stage3_transformations():
+    """
+    Generate stage3 transformation SQL for gold schema tables.
+    
+    Creates transformations in metadata.transformation1 for each recommendation:
+    - DROP TABLE IF EXISTS gold.final_name
+    - CREATE TABLE gold.final_name with proper schema
+    - INSERT INTO gold.final_name SELECT ... FROM silver.source_table
+    - OPTIMIZE TABLE gold.final_name FINAL
+    
+    Returns:
+        Dict[str, Any]: Transformation generation results
+    """
+    try:
+        logger.info("Generating stage3 transformations for gold schema...")
+        
+        # Initialize recommender
+        recommender = DimensionalModelRecommender()
+        
+        # Generate stage3 transformations
+        result = recommender.generate_stage3_transformations()
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error generating stage3 transformations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @model_router.get("/erd/relationships")
 async def get_erd_relationships(min_confidence: float = 0.5, limit: int = 100):
     """

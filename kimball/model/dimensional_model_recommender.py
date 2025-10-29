@@ -644,4 +644,251 @@ class DimensionalModelRecommender:
         except Exception as e:
             logger.error(f"Error storing recommendations: {e}")
             return False
+    
+    def generate_stage3_transformations(self) -> Dict[str, Any]:
+        """
+        Generate stage3 transformation SQL for gold schema tables.
+        
+        For each recommendation, creates transformations with:
+        1. DROP TABLE IF EXISTS gold.final_name
+        2. CREATE TABLE gold.final_name with proper schema
+        3. INSERT INTO gold.final_name SELECT ... FROM silver.source_table
+        4. OPTIMIZE TABLE gold.final_name FINAL
+        
+        Returns:
+            Dict containing transformation generation results
+        """
+        try:
+            logger.info("Generating stage3 transformations for gold schema...")
+            
+            # Get all recommendations
+            query = """
+            SELECT 
+                recommended_name,
+                final_name,
+                table_type,
+                source_table,
+                columns,
+                column_details
+            FROM metadata.dimensional_model
+            ORDER BY table_type, recommended_name
+            """
+            
+            recommendations = self.db_manager.execute_query_dict(query)
+            
+            if not recommendations:
+                return {
+                    "status": "error",
+                    "message": "No recommendations found. Generate recommendations first.",
+                    "transformations_created": 0
+                }
+            
+            transformations_created = []
+            transformation_counter = 1
+            
+            # Get next transformation_id
+            max_id_query = """
+            SELECT max(transformation_id) as max_id
+            FROM metadata.transformation1
+            WHERE transformation_stage = 'stage3'
+            """
+            max_result = self.db_manager.execute_query_dict(max_id_query)
+            next_transformation_id = (max_result[0]['max_id'] + 1) if max_result and max_result[0].get('max_id') else 1
+            
+            for rec in recommendations:
+                recommended_name = rec['recommended_name']
+                final_name = rec.get('final_name') or recommended_name
+                table_type = rec['table_type']
+                source_table = rec['source_table']
+                columns = rec.get('columns', [])
+                column_details = rec.get('column_details', [])
+                
+                # Skip if no final_name set
+                if not final_name or final_name == recommended_name:
+                    logger.warning(f"Skipping {recommended_name} - final_name not set or same as recommended_name")
+                    continue
+                
+                # Parse column details to get data types
+                # Format: "column_name:data_type:classification"
+                column_types = {}
+                for detail in column_details:
+                    if isinstance(detail, str) and ':' in detail:
+                        parts = detail.split(':')
+                        if len(parts) >= 2:
+                            col_name = parts[0]
+                            data_type = parts[1]
+                            column_types[col_name] = data_type
+                
+                # Also get actual column types from source table to ensure accuracy
+                try:
+                    source_cols_query = f"""
+                    SELECT 
+                        name as column_name,
+                        type as data_type
+                    FROM system.columns
+                    WHERE database = 'silver'
+                        AND table = '{source_table}'
+                    ORDER BY position
+                    """
+                    source_cols = self.db_manager.execute_query_dict(source_cols_query)
+                    # Override with actual types from source table
+                    for col in source_cols:
+                        col_name = col['column_name']
+                        if col_name in columns:  # Only include columns in our recommendation
+                            column_types[col_name] = col['data_type']
+                except Exception as e:
+                    logger.warning(f"Could not get column types from source table {source_table}: {e}")
+                    # Continue with types from column_details
+                
+                # Generate transformation name
+                transformation_name = f"{final_name}_transformation"
+                
+                statements = []
+                new_version = int(datetime.now().timestamp() * 1000000)
+                
+                # Statement 1: DROP TABLE IF EXISTS
+                drop_sql = f"DROP TABLE IF EXISTS gold.{final_name};"
+                statements.append({
+                    'execution_sequence': 1,
+                    'sql_statement': drop_sql,
+                    'statement_type': 'DROP',
+                    'description': f'Drop existing {final_name} table'
+                })
+                
+                # Statement 2: CREATE TABLE
+                # Build column definitions
+                column_defs = []
+                for col in columns:
+                    col_name = col if isinstance(col, str) else col.get('column_name', str(col))
+                    # Get data type from column_types or default to String
+                    data_type = column_types.get(col_name, 'String')
+                    column_defs.append(f"{col_name} {data_type}")
+                
+                # Determine ORDER BY clause based on table type
+                if table_type == 'fact':
+                    # For fact tables, order by dimension keys (foreign keys)
+                    order_by_cols = [col for col in columns if col in rec.get('dimension_keys', [])]
+                    if not order_by_cols:
+                        # Fallback to first few columns
+                        order_by_cols = columns[:3] if len(columns) >= 3 else columns
+                    order_by = f"ORDER BY ({', '.join(order_by_cols)})"
+                else:
+                    # For dimension tables, order by root/leaf columns or primary key
+                    root_col = rec.get('root_column')
+                    leaf_col = rec.get('leaf_column')
+                    if root_col and root_col in columns:
+                        order_by = f"ORDER BY ({root_col})"
+                    elif leaf_col and leaf_col in columns:
+                        order_by = f"ORDER BY ({leaf_col})"
+                    else:
+                        # Use first column as fallback
+                        order_by = f"ORDER BY ({columns[0]})" if columns else "ORDER BY tuple()"
+                
+                create_sql = f"""
+CREATE TABLE gold.{final_name} (
+    {', '.join(column_defs)}
+) ENGINE = MergeTree()
+{order_by};
+""".strip()
+                
+                statements.append({
+                    'execution_sequence': 2,
+                    'sql_statement': create_sql,
+                    'statement_type': 'CREATE',
+                    'description': f'Create {final_name} table in gold schema'
+                })
+                
+                # Statement 3: INSERT INTO ... SELECT
+                # Map columns from silver to gold (assuming same names for now)
+                select_cols = [col if isinstance(col, str) else col.get('column_name', str(col)) for col in columns]
+                insert_sql = f"""
+INSERT INTO gold.{final_name} ({', '.join(select_cols)})
+SELECT {', '.join(select_cols)}
+FROM silver.{source_table};
+""".strip()
+                
+                statements.append({
+                    'execution_sequence': 3,
+                    'sql_statement': insert_sql,
+                    'statement_type': 'INSERT',
+                    'description': f'Populate {final_name} from {source_table}'
+                })
+                
+                # Statement 4: OPTIMIZE TABLE
+                optimize_sql = f"OPTIMIZE TABLE gold.{final_name} FINAL;"
+                statements.append({
+                    'execution_sequence': 4,
+                    'sql_statement': optimize_sql,
+                    'statement_type': 'OPTIMIZE',
+                    'description': f'Optimize {final_name} table'
+                })
+                
+                # Insert statements into transformation1
+                for statement in statements:
+                    escaped_sql = statement['sql_statement'].replace("'", "''")
+                    
+                    insert_transformation_sql = f"""
+                    INSERT INTO metadata.transformation1 (
+                        transformation_stage,
+                        transformation_id,
+                        transformation_name,
+                        transformation_schema_name,
+                        dependencies,
+                        execution_frequency,
+                        source_schema,
+                        source_table,
+                        target_schema,
+                        target_table,
+                        execution_sequence,
+                        sql_statement,
+                        statement_type,
+                        version
+                    ) VALUES (
+                        'stage3',
+                        {next_transformation_id},
+                        '{transformation_name}',
+                        'metadata',
+                        '[]',
+                        'daily',
+                        'silver',
+                        '{source_table}',
+                        'gold',
+                        '{final_name}',
+                        {statement['execution_sequence']},
+                        '{escaped_sql}',
+                        '{statement['statement_type']}',
+                        {new_version}
+                    )
+                    """
+                    
+                    self.db_manager.execute_command(insert_transformation_sql)
+                    new_version += 1  # Increment version for each statement
+                
+                transformations_created.append({
+                    'transformation_name': transformation_name,
+                    'transformation_id': next_transformation_id,
+                    'final_name': final_name,
+                    'source_table': source_table,
+                    'table_type': table_type,
+                    'statements': len(statements)
+                })
+                
+                next_transformation_id += 1
+            
+            logger.info(f"Generated {len(transformations_created)} stage3 transformations")
+            
+            return {
+                "status": "success",
+                "message": f"Generated {len(transformations_created)} stage3 transformations",
+                "transformations_created": len(transformations_created),
+                "transformations": transformations_created
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating stage3 transformations: {e}")
+            return {
+                "status": "error",
+                "message": f"Failed to generate stage3 transformations: {str(e)}",
+                "transformations_created": 0
+            }
 
