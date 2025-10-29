@@ -856,11 +856,13 @@ curl -X GET "http://localhost:8000/api/v1/model/dimensional-model/recommendation
 
 #### **Update Recommendation Names**
 
-The GET endpoint returns only the most recent recommendation per source_table, so old names won't appear after updates.
+The recommendations use a `final_name` column that can be updated. The `recommended_name` stays as the original generated name (e.g., `dimension1_dim`), while `final_name` can be changed to meaningful names (e.g., `calendar_dim`).
+
+**Note**: Updates modify existing records (no duplicates created). Table is unique by `(table_type, recommended_name, source_table)`.
 
 ```bash
-# Example: Update all recommendations with meaningful names
-# 1. Rename dimension1_dim -> calendar_dim
+# Example: Update all recommendations with meaningful final names
+# 1. Update dimension1_dim final_name to calendar_dim
 curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendations" \
   -H "Content-Type: application/json" \
   -d '{
@@ -868,7 +870,7 @@ curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendation
     "new_table_name": "calendar_dim"
   }'
 
-# 2. Rename dimension2_dim -> geography_dim  
+# 2. Update dimension2_dim final_name to geography_dim  
 curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendations" \
   -H "Content-Type: application/json" \
   -d '{
@@ -876,7 +878,7 @@ curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendation
     "new_table_name": "geography_dim"
   }'
 
-# 3. Rename dimension3_dim -> product_dim
+# 3. Update dimension3_dim final_name to product_dim
 curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendations" \
   -H "Content-Type: application/json" \
   -d '{
@@ -884,7 +886,7 @@ curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendation
     "new_table_name": "product_dim"
   }'
 
-# 4. Rename fact1_fact -> daily_sales_fact
+# 4. Update fact1_fact final_name to daily_sales_fact
 curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendations" \
   -H "Content-Type: application/json" \
   -d '{
@@ -892,7 +894,7 @@ curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendation
     "new_table_name": "daily_sales_fact"
   }'
 
-# Rename table and update column names (optional)
+# Update final_name and column names (optional)
 curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendations" \
   -H "Content-Type: application/json" \
   -d '{
@@ -961,8 +963,15 @@ curl -X PUT "http://localhost:8000/api/v1/model/dimensional-model/recommendation
 - Uses hierarchies to identify dimension tables (_dim suffix)
 - Uses ERD relationships to identify fact tables (_fact suffix)
 - Analyzes discover metadata for column classifications
-- Generates temporary names (dimension1_dim, fact1_fact) that can be updated
+- Generates `recommended_name` (dimension1_dim, fact1_fact) as original identifier
+- Initializes `final_name` with `recommended_name` (can be updated by users)
+- Table is unique by `(table_type, recommended_name, source_table)`
+- Updates modify existing records (no duplicates created)
 - Stores recommendations in `metadata.dimensional_model` table
+
+**GET Response includes both fields:**
+- `recommended_name`: Original generated name (dimension1_dim) - never changes
+- `final_name`: User-defined name (calendar_dim) - can be updated
 
 ### **Model Phase Testing Tips**
 
