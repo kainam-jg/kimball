@@ -69,49 +69,126 @@ class HierarchyAnalyzer:
     def load_dimension_columns(self) -> None:
         """
         Load dimension columns from Stage 1 tables for hierarchy analysis.
+        Queries system.columns directly instead of relying on metadata.discover.
         """
         logger.info("Loading dimension columns from Stage 1 tables...")
         
         for table_name in self.stage1_tables:
             try:
-                # Get dimension columns from metadata.discover
-                query = f"""
+                # Get column structure from system.columns
+                structure_query = f"""
                 SELECT 
-                    original_table_name,
-                    original_column_name,
-                    new_column_name,
-                    inferred_type,
-                    classification,
-                    cardinality,
-                    null_count,
-                    sample_values
-                FROM metadata.discover
-                WHERE original_table_name = '{table_name.replace('_stage1', '')}'
-                AND classification = 'dimension'
-                ORDER BY cardinality ASC
+                    name as column_name,
+                    type as data_type
+                FROM system.columns 
+                WHERE database = 'silver' 
+                AND table = '{table_name}'
+                ORDER BY position
                 """
                 
-                results = self.db_manager.execute_query_dict(query)
+                columns = self.db_manager.execute_query_dict(structure_query)
                 
-                for row in results:
-                    col_key = f"{table_name}.{row['new_column_name']}"
+                # Get row count for cardinality calculations
+                count_query = f"SELECT COUNT(*) as row_count FROM silver.{table_name}"
+                count_result = self.db_manager.execute_query_dict(count_query)
+                total_rows = count_result[0]['row_count'] if count_result else 0
+                
+                # Original table name (remove _stage1 suffix)
+                original_table_name = table_name.replace('_stage1', '')
+                
+                for col in columns:
+                    col_name = col['column_name']
+                    data_type = col['data_type']
+                    
+                    # Skip fact columns (numeric types), but include ID columns as dimensions
+                    # Also check table name - calendar and time dimension tables are all dimensions
+                    if self._is_fact_column(data_type, col_name, table_name):
+                        continue
+                    
+                    # Get cardinality (distinct count)
+                    try:
+                        distinct_query = f"SELECT COUNT(DISTINCT `{col_name}`) as distinct_count FROM silver.{table_name} WHERE `{col_name}` IS NOT NULL"
+                        distinct_result = self.db_manager.execute_query_dict(distinct_query)
+                        cardinality = distinct_result[0]['distinct_count'] if distinct_result else 0
+                    except Exception as e:
+                        logger.warning(f"Error getting cardinality for {table_name}.{col_name}: {e}")
+                        cardinality = 0
+                    
+                    # Get null count
+                    try:
+                        null_query = f"SELECT COUNT(*) as null_count FROM silver.{table_name} WHERE `{col_name}` IS NULL"
+                        null_result = self.db_manager.execute_query_dict(null_query)
+                        null_count = null_result[0]['null_count'] if null_result else 0
+                    except Exception as e:
+                        logger.warning(f"Error getting null count for {table_name}.{col_name}: {e}")
+                        null_count = 0
+                    
+                    # Skip columns with very low cardinality (< 2) as they're not useful for hierarchies
+                    if cardinality < 2:
+                        continue
+                    
+                    col_key = f"{table_name}.{col_name}"
                     self.dimension_columns[col_key] = {
                         'table_name': table_name,
-                        'original_table_name': row['original_table_name'],
-                        'original_column_name': row['original_column_name'],
-                        'new_column_name': row['new_column_name'],
-                        'inferred_type': row['inferred_type'],
-                        'classification': row['classification'],
-                        'cardinality': row['cardinality'],
-                        'null_count': row['null_count'],
-                        'sample_values': row['sample_values'] if row['sample_values'] else [],
-                        'data_type': row['inferred_type']
+                        'original_table_name': original_table_name,
+                        'original_column_name': col_name,
+                        'new_column_name': col_name,
+                        'inferred_type': data_type,
+                        'classification': 'dimension',
+                        'cardinality': cardinality,
+                        'null_count': null_count,
+                        'sample_values': [],  # Not needed for hierarchy analysis
+                        'data_type': data_type
                     }
                 
             except Exception as e:
                 logger.error(f"Error loading dimension columns for {table_name}: {e}")
         
         logger.info(f"Loaded {len(self.dimension_columns)} dimension columns")
+    
+    def _is_fact_column(self, data_type: str, column_name: str, table_name: str) -> bool:
+        """
+        Determine if a column is a fact column (numeric) or dimension column.
+        
+        Args:
+            data_type (str): Column data type from ClickHouse
+            column_name (str): Column name to check for ID patterns
+            table_name (str): Table name to check if it's a dimension table
+            
+        Returns:
+            bool: True if column is a fact column (should be excluded from hierarchy analysis)
+        """
+        data_type_lower = data_type.lower()
+        column_name_lower = column_name.lower()
+        table_name_lower = table_name.lower()
+        
+        # Dimension tables (calendar, time, etc.) - all columns are dimensions
+        dimension_table_patterns = ['calendar', 'time', 'date', 'dim']
+        if any(pattern in table_name_lower for pattern in dimension_table_patterns):
+            return False
+        
+        # ID columns are dimensions even if numeric (e.g., calendar_id, dealer_id)
+        id_patterns = ['_id', '_key', 'id_', 'key_']
+        if any(pattern in column_name_lower for pattern in id_patterns):
+            return False
+        
+        # Numeric dimension attributes (not measures)
+        dimension_numeric_patterns = ['_num', '_code', '_flag', 'is_', 'has_', 'working', '_year', '_day', '_month', '_qtr', '_week']
+        if any(pattern in column_name_lower for pattern in dimension_numeric_patterns):
+            return False
+        
+        # Fact measure patterns (these are definitely facts)
+        fact_patterns = ['amount', 'total', 'sum', 'quantity', 'count', 'value', 'price', 'cost', 'revenue', 'sales_amount']
+        if any(pattern in column_name_lower for pattern in fact_patterns):
+            return True
+        
+        # Numeric types are typically facts (but we've already handled dimension numeric types above)
+        numeric_types = ['float', 'int', 'uint', 'decimal', 'numeric']
+        if any(num_type in data_type_lower for num_type in numeric_types):
+            return True
+        
+        # Everything else (String, Date, etc.) is a dimension
+        return False
     
     def build_table_hierarchies(self) -> Dict[str, Any]:
         """
