@@ -101,7 +101,9 @@ async def get_demo_status():
         "status": "active",
         "phase": "Demo",
         "description": "Demo and utility endpoints for database management",
-        "available_operations": ["drop_tables", "truncate_tables", "list_tables"]
+        "available_operations": ["drop_tables", "truncate_tables", "list_tables", "cleanup_all"],
+        "supported_schemas": ["bronze", "silver", "gold", "metadata"],
+        "cleanup_all_description": "Drops all tables in bronze, silver, and gold schemas, truncates metadata tables"
     }
 
 @demo_router.post("/drop-tables")
@@ -197,11 +199,12 @@ async def list_tables(schema: str):
 @demo_router.post("/cleanup-all")
 async def cleanup_all():
     """
-    Complete cleanup: Drop bronze and silver tables, truncate metadata tables
+    Complete cleanup: Drop bronze, silver, and gold tables, truncate metadata tables
     
     This is equivalent to running the original script:
     - Drop all tables in 'bronze' schema
-    - Drop all tables in 'silver' schema  
+    - Drop all tables in 'silver' schema
+    - Drop all tables in 'gold' schema
     - Truncate all tables in 'metadata' schema
     """
     try:
@@ -225,6 +228,14 @@ async def cleanup_all():
             schemas_processed.append('silver')
             tables_affected['silver'] = silver_tables
             total_tables += len(silver_tables)
+        
+        # Drop gold tables
+        logger.info("Dropping all tables in gold schema")
+        gold_tables = drop_tables_in_schema(client, 'gold')
+        if gold_tables:
+            schemas_processed.append('gold')
+            tables_affected['gold'] = gold_tables
+            total_tables += len(gold_tables)
         
         # Truncate metadata tables
         logger.info("Truncating all tables in metadata schema")

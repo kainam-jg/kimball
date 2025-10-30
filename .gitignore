@@ -153,3 +153,9 @@ tests/
 
 # Archive folder for preserved functions
 archive/
+
+# PowerShell scripts (Windows-specific)
+*.ps1
+
+# Python packaging (not needed for FastAPI server)
+setup.py

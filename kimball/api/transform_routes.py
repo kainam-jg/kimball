@@ -897,19 +897,22 @@ async def get_transformations(
         
         results = db_manager.execute_query_dict(query)
         
-        # Group results by transformation_id and get name
+        # Group results by transformation_stage + transformation_id to avoid collisions across stages
         transformations = {}
         for row in results:
             trans_id = row["transformation_id"]
+            trans_stage = row["transformation_stage"]
             trans_name = row.get("transformation_name", f"transformation_{trans_id}")
-            if trans_id not in transformations:
-                transformations[trans_id] = {
+            # Use composite key: stage + id to ensure unique grouping
+            composite_key = f"{trans_stage}_{trans_id}"
+            if composite_key not in transformations:
+                transformations[composite_key] = {
                     "transformation_id": trans_id,
                     "transformation_name": trans_name,
-                    "transformation_stage": row["transformation_stage"],
+                    "transformation_stage": trans_stage,
                     "statements": []
                 }
-            transformations[trans_id]["statements"].append(row)
+            transformations[composite_key]["statements"].append(row)
         
         return {
             "status": "success",
