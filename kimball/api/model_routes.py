@@ -92,8 +92,8 @@ class ERDRelationshipCreateRequest(BaseModel):
 
 class CalendarGenerationRequest(BaseModel):
     """Request model for calendar dimension generation."""
-    start_date: str  # Format: YYYY-MM-DD
-    end_date: str    # Format: YYYY-MM-DD
+    start_date: str  # Format: YYYY-MM-DD (required)
+    end_date: str    # Format: YYYY-MM-DD (required)
 
 class DimensionalModelRecommendationUpdateRequest(BaseModel):
     """Request model for updating dimensional model recommendations."""
@@ -1527,7 +1527,8 @@ async def generate_calendar_dimension(request: CalendarGenerationRequest):
     Generate calendar dimension table in gold schema.
     
     Args:
-        request: CalendarGenerationRequest with start_date and end_date
+        request: CalendarGenerationRequest with REQUIRED start_date and end_date.
+                 Both dates must be provided in YYYY-MM-DD format.
         
     Returns:
         Dict containing generation results and statistics
@@ -1550,7 +1551,7 @@ async def generate_calendar_dimension(request: CalendarGenerationRequest):
         db_manager = DatabaseManager()
         calendar_generator = CalendarGenerator(db_manager)
         
-        # Generate calendar dimension
+        # Generate calendar dimension using ONLY the provided dates
         result = calendar_generator.generate_calendar_dimension(
             request.start_date, 
             request.end_date
@@ -1567,7 +1568,6 @@ async def generate_calendar_dimension(request: CalendarGenerationRequest):
     except Exception as e:
         logger.error(f"Error generating calendar dimension: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to generate calendar dimension: {str(e)}")
-
 
 @model_router.get("/calendar/status")
 async def get_calendar_status():

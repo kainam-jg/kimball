@@ -111,6 +111,9 @@ class TransformEngine:
             
             table_name = self._get_table_name(stage)
             
+            from ..core.sql_transformation import SQLTransformation
+            import json
+            
             # Try to parse as integer for transformation_id, otherwise use as transformation_name
             try:
                 trans_id_int = int(transformation_id)
@@ -119,7 +122,7 @@ class TransformEngine:
                     transformation_id,
                     transformation_name,
                     execution_sequence,
-                    sql_statement,
+                    sql_data,
                     statement_type,
                     created_at,
                     updated_at,
@@ -135,7 +138,7 @@ class TransformEngine:
                     transformation_id,
                     transformation_name,
                     execution_sequence,
-                    sql_statement,
+                    sql_data,
                     statement_type,
                     created_at,
                     updated_at,
@@ -146,7 +149,35 @@ class TransformEngine:
                 """
             
             results = self.db_manager.execute_query_dict(query)
-            return results if results else []
+            if not results:
+                return []
+            
+            # Parse sql_data JSON and extract SQL statements
+            statements = []
+            for row in results:
+                try:
+                    # Parse the JSON from sql_data
+                    sql_data_json = json.loads(row['sql_data'])
+                    transformation = SQLTransformation.from_json(sql_data_json)
+                    
+                    # Get the SQL statement from the transformation
+                    sql_statement = transformation.to_sql()
+                    
+                    statements.append({
+                        "transformation_id": row['transformation_id'],
+                        "transformation_name": row['transformation_name'],
+                        "execution_sequence": row['execution_sequence'],
+                        "sql_statement": sql_statement,  # For backward compatibility
+                        "statement_type": row['statement_type'],
+                        "created_at": row['created_at'],
+                        "updated_at": row['updated_at'],
+                        "version": row['version']
+                    })
+                except Exception as parse_error:
+                    logger.error(f"Error parsing sql_data for transformation {row['transformation_id']}, sequence {row['execution_sequence']}: {parse_error}")
+                    continue
+            
+            return statements
             
         except Exception as e:
             logger.error(f"Error getting transformation statements for {transformation_id}: {e}")
@@ -226,11 +257,29 @@ class TransformEngine:
                     # Continue with next statement instead of failing entire transformation
                     # This allows partial success scenarios
             
+            # Add record count validation after all statements are executed
+            logger.info(f"Starting record count validation for transformation {transformation_id}")
+            validation_result = self._validate_record_counts(transformation_id, statements, self.db_manager)
+            if validation_result:
+                logger.info(f"Validation result: {validation_result}")
+                execution_results.append(validation_result)
+            else:
+                logger.info(f"No validation result for transformation {transformation_id}")
+            
             total_execution_time = (datetime.now() - start_time).total_seconds()
             
             # Determine overall status
+            validation_failed = any(r.get("statement_type") == "VALIDATION" and r.get("status") == "error" for r in execution_results)
             failed_statements = [r for r in execution_results if r["status"] == "error"]
-            overall_status = "success" if not failed_statements else "partial_success" if len(failed_statements) < len(statements) else "error"
+            
+            if not failed_statements and not validation_failed:
+                overall_status = "success"
+            elif not failed_statements and validation_failed:
+                overall_status = "error"
+            elif len(failed_statements) < len(statements):
+                overall_status = "partial_success"
+            else:
+                overall_status = "error"
             
             return {
                 "status": overall_status,
@@ -270,8 +319,12 @@ class TransformEngine:
             # Create a separate database manager for this thread
             db_manager = DatabaseManager()
             
-            # Get transformation statements (using the instance method to find stage)
-            statements = self.get_transformation_statements(transformation_id, stage)
+            # Create a new TransformEngine instance for this thread
+            engine = TransformEngine()
+            engine.db_manager = db_manager
+            
+            # Get transformation statements (using the new engine instance)
+            statements = engine.get_transformation_statements(transformation_id, stage)
             
             if not statements:
                 return {
@@ -329,12 +382,26 @@ class TransformEngine:
                         "sql_preview": statement['sql_statement'][:100] + "..." if len(statement['sql_statement']) > 100 else statement['sql_statement']
                     })
             
+            # Add record count validation after all statements are executed
+            logger.info(f"Starting record count validation for transformation {transformation_id}")
+            validation_result = self._validate_record_counts(transformation_id, statements, db_manager)
+            if validation_result:
+                logger.info(f"Validation result: {validation_result}")
+                execution_results.append(validation_result)
+            else:
+                logger.info(f"No validation result for transformation {transformation_id}")
+            
             total_execution_time = (datetime.now() - start_time).total_seconds()
             
             # Determine overall status
-            if statements_failed == 0:
+            validation_failed = any(r.get("statement_type") == "VALIDATION" and r.get("status") == "error" for r in execution_results)
+            
+            if statements_failed == 0 and not validation_failed:
                 status = "success"
                 message = f"Transformation {transformation_id} completed"
+            elif statements_failed == 0 and validation_failed:
+                status = "error"
+                message = f"Transformation {transformation_id} completed but record count validation failed"
             elif statements_executed > 0:
                 status = "partial_success"
                 message = f"Transformation {transformation_id} completed with {statements_failed} failed statements"
@@ -555,6 +622,88 @@ class TransformEngine:
                 "message": f"Error getting status: {str(e)}"
             }
     
+    def _validate_record_counts(self, transformation_id: str, statements: List[Dict], db_manager) -> Optional[Dict]:
+        """
+        Validate that source and target record counts match for stage1 transformations.
+        
+        Args:
+            transformation_id: Transformation ID
+            statements: List of transformation statements
+            db_manager: Database manager instance
+        
+        Returns:
+            Validation result dictionary or None if not applicable
+        """
+        try:
+            # Only validate stage1 transformations with INSERT statements
+            insert_statements = [stmt for stmt in statements if stmt['statement_type'] == 'INSERT']
+            if not insert_statements:
+                return None
+            
+            # Extract source and target table information from the first INSERT statement
+            insert_sql = insert_statements[0]['sql_statement']
+            
+            # Parse the INSERT statement to get source and target tables
+            # Format: INSERT INTO silver.table_name SELECT ... FROM bronze.table_name
+            if 'INSERT INTO silver.' not in insert_sql or 'FROM bronze.' not in insert_sql:
+                return None
+            
+            # Extract target table (silver)
+            target_table = insert_sql.split('INSERT INTO silver.')[1].split(' ')[0].split('\n')[0]
+            
+            # Extract source table (bronze) 
+            source_table = insert_sql.split('FROM bronze.')[1].split(';')[0].split(' ')[0].split('\n')[0]
+            
+            # Get record counts
+            source_count_query = f"SELECT COUNT(*) as count FROM bronze.{source_table}"
+            target_count_query = f"SELECT COUNT(*) as count FROM silver.{target_table}"
+            
+            source_result = db_manager.execute_query_dict(source_count_query)
+            target_result = db_manager.execute_query_dict(target_count_query)
+            
+            source_count = source_result[0]['count'] if source_result else 0
+            target_count = target_result[0]['count'] if target_result else 0
+            
+            # Determine validation status
+            counts_match = source_count == target_count
+            validation_status = "success" if counts_match else "error"
+            
+            validation_message = f"Record count validation: Source={source_count}, Target={target_count}"
+            if not counts_match:
+                validation_message += f" - MISMATCH! Expected {source_count} records, got {target_count}"
+            
+            return {
+                "execution_sequence": 999,  # Use high number to appear last
+                "statement_type": "VALIDATION",
+                "description": "Record count validation",
+                "status": validation_status,
+                "records_processed": 0,
+                "execution_time": 0,
+                "sql_preview": f"Source: {source_table} ({source_count}), Target: {target_table} ({target_count})",
+                "validation_details": {
+                    "source_table": f"bronze.{source_table}",
+                    "target_table": f"silver.{target_table}",
+                    "source_count": source_count,
+                    "target_count": target_count,
+                    "counts_match": counts_match
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error validating record counts for transformation {transformation_id}: {e}")
+            return {
+                "execution_sequence": 999,
+                "statement_type": "VALIDATION",
+                "description": "Record count validation",
+                "status": "error",
+                "records_processed": 0,
+                "execution_time": 0,
+                "sql_preview": f"Validation error: {str(e)}",
+                "validation_details": {
+                    "error": str(e)
+                }
+            }
+
     def __del__(self):
         """Cleanup thread pool executor."""
         if hasattr(self, 'executor'):

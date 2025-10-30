@@ -19,6 +19,9 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from ..core.database import DatabaseManager
+from ..core.sql_transformation import SQLTransformation, TransformationStage
+from ..core.sql_parser import SQLParser
+from ..core.transformation_storage import TransformationStorage
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -159,6 +162,170 @@ def validate_sql(sql: str, stage: str) -> Dict[str, Any]:
         "warnings": warnings,
         "suggestions": suggestions
     }
+
+def generate_stage1_statements(original_table: str, silver_table_name: str, columns: List[Dict], transformation_id: int) -> List[Dict]:
+    """
+    Generate stage1 transformation statements for bronze to silver conversion.
+    
+    Args:
+        original_table: Original table name in bronze layer
+        silver_table_name: Target table name in silver layer (with _stage1 suffix)
+        columns: List of column metadata from discovery
+        transformation_id: Transformation ID for the statements
+    
+    Returns:
+        List of statement dictionaries with execution_sequence, sql_statement, and statement_type
+    """
+    statements = []
+    
+    # Statement 1: DROP TABLE IF EXISTS
+    drop_sql = f"DROP TABLE IF EXISTS silver.{silver_table_name};"
+    statements.append({
+        'execution_sequence': 1,
+        'sql_statement': drop_sql,
+        'statement_type': 'DROP'
+    })
+    
+    # Statement 2: CREATE TABLE with proper schema
+    create_columns = []
+    for col in columns:
+        new_column_name = col['new_column_name']
+        inferred_type = col['inferred_type']
+        
+        # Map inferred types to ClickHouse types
+        clickhouse_type = map_to_clickhouse_type(inferred_type, col.get('data_quality_score', 0.0))
+        create_columns.append(f"{new_column_name} {clickhouse_type}")
+    
+    # Add create_date column if not present
+    has_create_date = any(col['new_column_name'].lower() == 'create_date' for col in columns)
+    if not has_create_date:
+        create_columns.append("create_date Date")
+    
+    # Create table with partitioning and ordering
+    create_sql = f"""CREATE TABLE silver.{silver_table_name} (
+    {', '.join(create_columns)}
+) ENGINE = MergeTree()
+PARTITION BY toStartOfYear(create_date)
+ORDER BY (create_date);"""
+    
+    statements.append({
+        'execution_sequence': 2,
+        'sql_statement': create_sql,
+        'statement_type': 'CREATE'
+    })
+    
+    # Statement 3: INSERT with type conversions
+    select_columns = []
+    for col in columns:
+        original_column_name = col['original_column_name']
+        new_column_name = col['new_column_name']
+        inferred_type = col['inferred_type']
+        
+        # Generate conversion expression
+        conversion_expr = generate_type_conversion(original_column_name, inferred_type, col.get('data_quality_score', 0.0))
+        select_columns.append(f"{conversion_expr} AS {new_column_name}")
+    
+    # Add create_date conversion if not in original columns
+    if not has_create_date:
+        select_columns.append("toDate(parseDateTimeBestEffortOrNull(create_date)) AS create_date")
+    
+    insert_sql = f"""INSERT INTO silver.{silver_table_name}
+SELECT 
+    {', '.join(select_columns)}
+FROM bronze.{original_table};"""
+    
+    statements.append({
+        'execution_sequence': 3,
+        'sql_statement': insert_sql,
+        'statement_type': 'INSERT'
+    })
+    
+    # Statement 4: OPTIMIZE TABLE
+    optimize_sql = f"OPTIMIZE TABLE silver.{silver_table_name} FINAL;"
+    statements.append({
+        'execution_sequence': 4,
+        'sql_statement': optimize_sql,
+        'statement_type': 'OPTIMIZE'
+    })
+    
+    return statements
+
+def map_to_clickhouse_type(inferred_type: str, confidence: float) -> str:
+    """
+    Map inferred types from discovery to ClickHouse data types.
+    
+    Args:
+        inferred_type: Type inferred by discovery phase
+        confidence: Confidence level of the inference
+    
+    Returns:
+        ClickHouse data type string
+    """
+    type_mapping = {
+        'string': 'String',
+        'date': 'Date',
+        'datetime': 'DateTime',
+        'numeric': 'Decimal(15, 2)',
+        'int': 'Int64',
+        'float': 'Float64',
+        'boolean': 'UInt8',
+        # Legacy mappings for backward compatibility
+        'String': 'String',
+        'Date': 'Date',
+        'DateTime': 'DateTime',
+        'Int64': 'Int64',
+        'Float64': 'Float64',
+        'Decimal': 'Decimal(15, 2)',
+        'Boolean': 'UInt8'
+    }
+    
+    # Use confidence to determine precision for numeric types
+    if inferred_type == 'numeric' and confidence > 0.8:
+        return 'Decimal(15, 2)'
+    elif inferred_type == 'numeric':
+        return 'Decimal(10, 2)'
+    
+    return type_mapping.get(inferred_type, 'String')
+
+def generate_type_conversion(column_name: str, inferred_type: str, confidence: float) -> str:
+    """
+    Generate ClickHouse type conversion expression for a column.
+    
+    Args:
+        column_name: Original column name
+        inferred_type: Inferred type from discovery
+        confidence: Confidence level of the inference
+    
+    Returns:
+        ClickHouse conversion expression
+    """
+    # Handle special cases for common patterns
+    if inferred_type in ['string', 'String']:
+        return f"trim({column_name})"
+    elif inferred_type in ['date', 'Date']:
+        return f"toDate(parseDateTimeBestEffortOrNull({column_name}))"
+    elif inferred_type in ['datetime', 'DateTime']:
+        return f"parseDateTimeBestEffortOrNull({column_name})"
+    elif inferred_type in ['int', 'Int64']:
+        return f"toInt64OrNull({column_name})"
+    elif inferred_type in ['float', 'Float64']:
+        return f"toFloat64OrNull({column_name})"
+    elif inferred_type in ['numeric', 'Decimal']:
+        # Handle currency formatting
+        if confidence > 0.8:
+            return f"""toDecimal64OrNull(
+                if(match({column_name}, '^\\(.*\\)$'), 
+                   concat('-', replaceRegexpAll({column_name}, '[()]', '')), 
+                   replaceRegexpAll({column_name}, '[,$]', '')
+                ), 2
+            )"""
+        else:
+            return f"toDecimal64OrNull(replaceRegexpAll({column_name}, '[,$]', ''), 2)"
+    elif inferred_type in ['boolean', 'Boolean']:
+        return f"if({column_name} IN ('true', '1', 'yes', 'y'), 1, 0)"
+    else:
+        # Default to string with trimming
+        return f"trim({column_name})"
 
 # API Endpoints
 
@@ -923,4 +1090,215 @@ async def get_transformations(
         
     except Exception as e:
         logger.error(f"Error getting transformations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@transform_router.post("/generate-stage1-from-discovery")
+async def generate_stage1_from_discovery():
+    """
+    Automatically generate stage1 transformations from discovery metadata using the new SQL framework.
+    
+    This endpoint reads the metadata.discover table and creates stage1 transformations
+    that convert data from bronze to silver layer with proper type conversions.
+    
+    The generated transformations will:
+    - Use new_table_name from discovery with _stage1 suffix
+    - Use new_column_name from discovery for column names
+    - Convert string types to inferred types from discovery
+    - Create DROP, CREATE, and INSERT statements for each table
+    - Store transformations using the new JSON-based framework
+    
+    Returns:
+        Dict containing generation results and created transformations
+    """
+    try:
+        db_manager = DatabaseManager()
+        storage = TransformationStorage(db_manager)
+        
+        # Get discovery metadata grouped by table
+        discovery_query = """
+        SELECT 
+            original_table_name,
+            new_table_name,
+            original_column_name,
+            new_column_name,
+            inferred_type,
+            classification,
+            cardinality,
+            data_quality_score
+        FROM metadata.discover
+        ORDER BY original_table_name, original_column_name
+        """
+        
+        discovery_results = db_manager.execute_query_dict(discovery_query)
+        
+        logger.info(f"Discovery query returned {len(discovery_results) if discovery_results else 0} results")
+        
+        if not discovery_results:
+            return {
+                "status": "success",
+                "message": "No discovery metadata found",
+                "transformations_created": 0,
+                "tables_processed": []
+            }
+        
+        # Group by table
+        tables_metadata = {}
+        for row in discovery_results:
+            table_name = row['original_table_name']
+            if table_name not in tables_metadata:
+                tables_metadata[table_name] = {
+                    'new_table_name': row['new_table_name'],
+                    'columns': []
+                }
+            tables_metadata[table_name]['columns'].append(row)
+        
+        # Get next transformation_id
+        get_max_id_sql = "SELECT COALESCE(MAX(transformation_id), 0) as max_id FROM metadata.transformation1"
+        max_id_result = db_manager.execute_query_dict(get_max_id_sql)
+        next_transformation_id = (max_id_result[0]['max_id'] if max_id_result else 0) + 1
+        
+        created_transformations = []
+        
+        # Process each table
+        for original_table, table_data in tables_metadata.items():
+            new_table_name = table_data['new_table_name']
+            silver_table_name = f"{new_table_name}_stage1"
+            columns = table_data['columns']
+            
+            # Generate transformation statements using the old method
+            statements = generate_stage1_statements(
+                original_table, 
+                silver_table_name, 
+                columns, 
+                next_transformation_id
+            )
+            
+            # Convert each statement to the new framework
+            for statement in statements:
+                # Create transformation data using the new framework
+                transformation_data = SQLParser.create_transformation_data(
+                    sql=statement['sql_statement'],
+                    stage=TransformationStage.STAGE1,
+                    transformation_id=next_transformation_id,
+                    transformation_name=silver_table_name,
+                    execution_sequence=statement['execution_sequence'],
+                    custom_metadata={
+                        'source_table': original_table,
+                        'target_table': silver_table_name,
+                        'generated_from': 'discovery_metadata',
+                        'transformation_schema_name': 'metadata',
+                        'dependencies': [],
+                        'execution_frequency': 'daily',
+                        'column_mappings': [
+                            {
+                                'source': col['original_column_name'],
+                                'target': col['new_column_name'],
+                                'type': col['inferred_type']
+                            } for col in columns
+                        ]
+                    }
+                )
+                
+                # Create transformation object
+                transformation = SQLTransformation(transformation_data)
+                
+                # Store using the new framework
+                success = storage.store_transformation(transformation)
+                if not success:
+                    logger.error(f"Failed to store transformation {next_transformation_id}")
+            
+            created_transformations.append({
+                'transformation_id': next_transformation_id,
+                'transformation_name': silver_table_name,
+                'source_table': original_table,
+                'target_table': silver_table_name,
+                'statements_created': len(statements)
+            })
+            
+            next_transformation_id += 1
+        
+        return {
+            "status": "success",
+            "message": f"Generated {len(created_transformations)} stage1 transformations using new framework",
+            "transformations_created": len(created_transformations),
+            "tables_processed": list(tables_metadata.keys()),
+            "transformations": created_transformations
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating stage1 transformations from discovery: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# New endpoint for manual SQL injection testing
+class SQLTransformationRequest(BaseModel):
+    """Request model for creating SQL transformations"""
+    sql: str
+    stage: str
+    transformation_id: int
+    transformation_name: str
+    execution_sequence: int = 1
+    metadata: Optional[Dict[str, Any]] = None
+
+@transform_router.post("/transformations/sql")
+async def create_sql_transformation(request: SQLTransformationRequest):
+    """
+    Create a SQL transformation for any stage using the new framework.
+    
+    This endpoint allows manual injection of any SQL and stores it using
+    the JSON-based framework for safe storage and execution.
+    
+    Args:
+        request: SQL transformation request with SQL, stage, and metadata
+    
+    Returns:
+        Dict containing creation results
+    """
+    try:
+        # Validate stage
+        try:
+            stage_enum = TransformationStage(request.stage)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid stage: {request.stage}. Must be one of: stage1, stage2, stage3, stage4")
+        
+        # Create transformation data using the new framework
+        default_metadata = {
+            'transformation_schema_name': 'metadata',
+            'dependencies': [],
+            'execution_frequency': 'daily'
+        }
+        if request.metadata:
+            default_metadata.update(request.metadata)
+            
+        transformation_data = SQLParser.create_transformation_data(
+            sql=request.sql,
+            stage=stage_enum,
+            transformation_id=request.transformation_id,
+            transformation_name=request.transformation_name,
+            execution_sequence=request.execution_sequence,
+            custom_metadata=default_metadata
+        )
+        
+        # Create transformation object
+        transformation = SQLTransformation(transformation_data)
+        
+        # Store in database
+        storage = TransformationStorage(DatabaseManager())
+        success = storage.store_transformation(transformation)
+        
+        if success:
+            return {
+                "status": "success",
+                "message": f"SQL transformation created for {request.stage}",
+                "transformation_id": request.transformation_id,
+                "stage": request.stage,
+                "transformation_name": request.transformation_name,
+                "source_tables": transformation.get_source_tables(),
+                "target_tables": transformation.get_target_tables(),
+                "statement_type": transformation.get_statement_type()
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to store transformation")
+            
+    except Exception as e:
+        logger.error(f"Error creating SQL transformation: {e}")
         raise HTTPException(status_code=500, detail=str(e))

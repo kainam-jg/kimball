@@ -632,6 +632,49 @@ curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/sta
 
 # Execute all stage3 transformations sequentially
 curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/stage/stage3?parallel=false"
+```
+
+#### **Automated Stage1 Generation from Discovery** ✅ **NEW**
+```bash
+# Generate stage1 transformations automatically from discovery metadata
+curl -X POST "http://localhost:8000/api/v1/transform/generate-stage1-from-discovery"
+```
+
+This endpoint automatically:
+- Reads discovery metadata from `metadata.discover` table
+- Generates stage1 transformations for each table using the new JSON-based framework
+- Creates DROP, CREATE, INSERT, and OPTIMIZE statements
+- Converts string types to inferred types from discovery
+- Uses `new_table_name` with `_stage1` suffix for silver tables
+- Uses `new_column_name` for column names
+- Handles type conversions (String → Date, DateTime, Float64, Int64, Decimal, Boolean)
+- Stores transformations using the new `sql_data` JSON format
+
+#### **Manual SQL Transformation Injection** ✅ **NEW**
+```bash
+# Inject any SQL transformation manually using the new framework
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/sql" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sql": "CREATE TABLE silver.test_stage1 (id Int64, name String) ENGINE = MergeTree() ORDER BY id;",
+    "stage": "stage1",
+    "transformation_id": 999,
+    "transformation_name": "custom_test",
+    "execution_sequence": 1,
+    "metadata": {
+      "description": "Custom test transformation",
+      "test_type": "manual_injection"
+    }
+  }'
+```
+
+This endpoint allows you to:
+- Store any SQL statement using the JSON-based framework
+- Support complex SQL including CTEs, window functions, nested functions
+- Automatically parse source and target tables from SQL
+- Extract statement type (SELECT, INSERT, CREATE, etc.)
+- Generate validation queries
+- Store with full SQL fidelity (no escaping issues)
 
 # Execute all stage2 transformations (if any exist)
 curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/stage/stage2"

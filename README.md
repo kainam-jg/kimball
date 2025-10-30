@@ -40,6 +40,7 @@ KIMBALL follows a four-phase approach:
 
 ### 3. **Transform Phase** ✅ **COMPLETE**
 - **Multi-Statement Transformations**: Advanced transformation system with DROP, CREATE, INSERT, OPTIMIZE sequences
+- **JSON-Based SQL Storage**: Reusable framework storing SQL as JSON for full flexibility and safe execution
 - **Upsert Logic**: Update transformations with automatic deduplication using ReplacingMergeTree
 - **TransformEngine**: Sequential execution engine for multi-statement transformations
 - **Stage1 Transformations**: Complete bronze to silver transformations with data type conversion
@@ -47,6 +48,9 @@ KIMBALL follows a four-phase approach:
 - **Parallel Execution**: Execute multiple transformations concurrently for better performance
 - **Schema Management**: transformation_schema_name for better organization
 - **Metadata-Driven**: Uses Discover phase metadata for intelligent transformations
+- **Automated Generation**: Generate stage1 transformations from discovery metadata automatically
+- **Manual SQL Injection**: Store any SQL transformation manually with full support for complex SQL
+- **Record Count Validation**: Automatic validation of source vs target record counts
 - **Rollback Capabilities**: Transaction-safe transformations with rollback support
 - **Monitoring & Logging**: Comprehensive transformation monitoring and audit trails
 
@@ -357,19 +361,17 @@ CREATE TABLE metadata.transformation1 (
     transformation_schema_name String,     -- Schema where transformation is stored
     dependencies Array(String),            -- Dependent transformations
     execution_frequency String,            -- How often to run (daily, hourly, etc.)
-    source_schema String,                  -- Source schema name
-    source_table String,                   -- Source table name
-    target_schema String,                  -- Target schema name
-    target_table String,                   -- Target table name
     execution_sequence UInt32,             -- Order of execution within transformation
-    sql_statement String,                  -- The actual SQL statement
     statement_type String,                 -- Type of statement (DROP, CREATE, INSERT, OPTIMIZE)
+    sql_data String,                       -- JSON-encoded SQL transformation with metadata
     created_at DateTime DEFAULT now(),
     updated_at DateTime DEFAULT now(),
     version UInt64 DEFAULT 1
 ) ENGINE = ReplacingMergeTree(version)
 ORDER BY (transformation_id, execution_sequence)
 ```
+
+**Note**: The transformation tables now use a JSON-based storage approach (`sql_data` field) that stores complete SQL transformation objects including the raw SQL, metadata, source/target table information, and validation queries. This approach provides full SQL flexibility while maintaining safe storage and execution capabilities.
 
 ## 🔄 Stream-Based Data Processing Architecture
 
@@ -623,6 +625,9 @@ Once the FastAPI backend is running, visit:
 - `GET /api/v1/transform/status` - Get transform status
 - `GET /api/v1/transform/transformations` - List all transformations
 - `POST /api/v1/transform/transformations` - Create multi-statement transformation
+- `POST /api/v1/transform/generate-stage1-from-discovery` - Auto-generate stage1 transformations from discovery metadata
+- `POST /api/v1/transform/transformations/sql` - Manually inject SQL transformation (any SQL supported)
+- `POST /api/v1/transform/transformations/execute/stage/{stage}` - Execute all transformations for a stage
 - `PUT /api/v1/transform/transformations/{name}` - Update transformation with upsert logic
 - `GET /api/v1/transform/transformations/{name}` - Get specific transformation
 - `POST /api/v1/transform/transformations/{name}/execute` - Execute single transformation
