@@ -1358,6 +1358,177 @@ curl -X POST "http://localhost:8000/api/v1/transform/transformations/daily_sales
 - Tables are partitioned by date for optimal performance
 - All dimension columns are denormalized into the fact table
 
+### **Column Definitions Management** ✅ **NEW**
+
+The definitions system provides comprehensive column-level metadata for all tables across bronze, silver, and gold schemas. It stores schema information, column types, precision, and user-editable descriptions.
+
+#### **Seed Definitions Table**
+```bash
+# Seed definitions from all schemas (bronze, silver, gold)
+curl -X POST "http://localhost:8000/api/v1/model/definitions/seed"
+
+# Seed definitions from specific schemas
+curl -X POST "http://localhost:8000/api/v1/model/definitions/seed" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "schema_names": ["gold", "silver"]
+  }'
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Seeded definitions for 3 schemas",
+  "total_tables": 12,
+  "total_columns": 156,
+  "schema_stats": {
+    "bronze": {"tables": 3, "columns": 12},
+    "silver": {"tables": 6, "columns": 78},
+    "gold": {"tables": 3, "columns": 66}
+  }
+}
+```
+
+**Note**: The seed process:
+- Creates `metadata.definitions` table if it doesn't exist
+- Iterates through all tables in specified schemas
+- Queries `system.columns` for each table
+- Extracts column type and precision information
+- Inserts metadata with empty `column_description` for user editing
+- Uses ReplacingMergeTree for automatic deduplication
+
+#### **Generate Gold Schema Descriptions**
+```bash
+# Generate intelligent descriptions for gold schema columns
+curl -X POST "http://localhost:8000/api/v1/model/definitions/generate-gold-descriptions"
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Generated 66 column descriptions for gold schema",
+  "descriptions_generated": 66,
+  "table_descriptions": {
+    "daily_sales_fact": 4,
+    "calendar_dim": 22,
+    "geography_dim": 8,
+    "product_dim": 8,
+    "daily_sales_k": 24
+  }
+}
+```
+
+**Note**: The description generation:
+- Uses ERD metadata to identify fact vs dimension columns
+- Uses dimensional model metadata for table context
+- Uses discovery metadata for column classifications
+- Analyzes column name patterns (amount, date, key, etc.)
+- Generates user-friendly descriptions based on:
+  - Column name patterns and data types
+  - Table types (fact, dimension, K-Table)
+  - ERD relationships and classifications
+  - Primary key candidates
+
+#### **Get Definitions**
+```bash
+# Get all definitions
+curl -X GET "http://localhost:8000/api/v1/model/definitions"
+
+# Get definitions for specific schema
+curl -X GET "http://localhost:8000/api/v1/model/definitions?schema_name=gold"
+
+# Get definitions for specific table
+curl -X GET "http://localhost:8000/api/v1/model/definitions?schema_name=gold&table_name=daily_sales_fact"
+
+# Limit results
+curl -X GET "http://localhost:8000/api/v1/model/definitions?schema_name=gold&limit=50"
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "count": 66,
+  "data": [
+    {
+      "schema_name": "gold",
+      "table_name": "daily_sales_fact",
+      "column_name": "amount_sales",
+      "column_type": "Decimal(15, 2)",
+      "column_precision": "15, 2",
+      "column_description": "Monetary measure. Fact measure representing sales/amount data.",
+      "created_at": "2024-10-15 10:30:00",
+      "updated_at": "2024-10-15 10:30:00"
+    },
+    {
+      "schema_name": "gold",
+      "table_name": "daily_sales_fact",
+      "column_name": "sales_date",
+      "column_type": "Date",
+      "column_precision": "",
+      "column_description": "Date/timestamp field.",
+      "created_at": "2024-10-15 10:30:00",
+      "updated_at": "2024-10-15 10:30:00"
+    }
+  ]
+}
+```
+
+#### **Update Column Description**
+```bash
+# Update column description
+curl -X PUT "http://localhost:8000/api/v1/model/definitions/description" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "schema_name": "gold",
+    "table_name": "daily_sales_fact",
+    "column_name": "amount_sales",
+    "description": "Total sales amount in dollars. This is the primary measure for sales analysis."
+  }'
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Updated description for gold.daily_sales_fact.amount_sales",
+  "schema_name": "gold",
+  "table_name": "daily_sales_fact",
+  "column_name": "amount_sales",
+  "description": "Total sales amount in dollars. This is the primary measure for sales analysis."
+}
+```
+
+**Note**: The update process:
+- Uses ReplacingMergeTree for automatic upserts
+- Updates `updated_at` timestamp automatically
+- Preserves all other column metadata (type, precision, etc.)
+- Returns 404 if definition not found
+
+#### **Complete Definitions Workflow**
+```bash
+# 1. Seed definitions from all schemas
+curl -X POST "http://localhost:8000/api/v1/model/definitions/seed"
+
+# 2. Generate intelligent descriptions for gold schema
+curl -X POST "http://localhost:8000/api/v1/model/definitions/generate-gold-descriptions"
+
+# 3. Review and edit descriptions as needed
+curl -X PUT "http://localhost:8000/api/v1/model/definitions/description" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "schema_name": "gold",
+    "table_name": "daily_sales_fact",
+    "column_name": "amount_sales",
+    "description": "Your custom description here"
+  }'
+
+# 4. Query definitions for documentation
+curl -X GET "http://localhost:8000/api/v1/model/definitions?schema_name=gold"
+```
+
 ### **Model Phase Testing Tips**
 
 1. **Start with Status**: Always check `/api/v1/model/status` first to ensure the phase is active
@@ -1841,6 +2012,9 @@ curl -X POST "http://localhost:8000/api/v1/transform/transformations/non_existen
 - ✅ **Stage4 K-Table Generation**: Automatically generates denormalized "One Big Table" combining fact and dimension tables
 - ✅ **ERD-Based Join Logic**: Uses data-driven ERD analysis to determine accurate join keys for K-Tables
 - ✅ **Automatic ERD Analysis**: Gold schema ERD is automatically analyzed during K-Table generation (preserves silver ERD data)
+- ✅ **Column Definitions Management**: Comprehensive column-level metadata system for all schemas (bronze, silver, gold)
+- ✅ **Intelligent Description Generation**: Automatically generates user-friendly column descriptions for gold schema
+- ✅ **Definition Editing**: Full CRUD operations for column descriptions with ReplacingMergeTree upserts
 
 ### **Bug Fixes**
 - Fixed `postgresql` vs `postgres` source type validation

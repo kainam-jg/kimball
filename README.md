@@ -69,6 +69,9 @@ KIMBALL follows a four-phase approach:
 - **Stage 3 Transformation Generation**: Automatically generates SQL to create gold schema dimensional model
 - **Stage 4 K-Table Generation**: Creates denormalized "One Big Table" combining fact and dimension tables
 - **ERD-Based Join Logic**: Uses data-driven ERD analysis to determine proper join keys for K-Table
+- **Column Definitions Management**: Comprehensive column-level metadata across all schemas (bronze, silver, gold)
+- **Intelligent Description Generation**: Automatically generates user-friendly column descriptions for gold schema
+- **Definition Editing**: Full CRUD operations for column descriptions and metadata
 - **✏️ Editing Capabilities**: Full CRUD operations for ERD relationships and hierarchies
 - **🎨 Custom Creation**: User-defined relationship and hierarchy creation
 - **🗑️ Deletion Management**: Soft deletion with version control and audit trails
@@ -100,6 +103,7 @@ The Model Phase provides comprehensive ERD and hierarchy analysis for dimensiona
 - **`metadata.dimensional_model`**: Dimensional model recommendations with fact and dimension table definitions
 - **`metadata.transformation3`**: Stage 3 transformations for creating gold schema dimensional model
 - **`metadata.transformation4`**: Stage 4 transformations for creating K-Table denormalized tables
+- **`metadata.definitions`**: Column-level metadata definitions for all tables across bronze, silver, and gold schemas
 - **Upsert Functionality**: Automatic metadata updates with version control
 - **Query Optimization**: Indexed metadata tables for fast retrieval
 

@@ -21,6 +21,7 @@ from ..model.erd_analyzer import ERDAnalyzer
 from ..model.hierarchy_analyzer import HierarchyAnalyzer
 from ..model.calendar_generator import CalendarGenerator
 from ..model.dimensional_model_recommender import DimensionalModelRecommender
+from ..model.definitions_manager import DefinitionsManager
 from ..core.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -1659,3 +1660,158 @@ async def get_calendar_status():
     except Exception as e:
         logger.error(f"Error getting calendar status: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get calendar status: {str(e)}")
+
+# =============================================================================
+# Definitions Endpoints
+# =============================================================================
+
+class DefinitionsSeedRequest(BaseModel):
+    """Request model for seeding definitions."""
+    schema_names: Optional[List[str]] = None  # Defaults to ['bronze', 'silver', 'gold']
+
+class DefinitionUpdateRequest(BaseModel):
+    """Request model for updating a column description."""
+    schema_name: str
+    table_name: str
+    column_name: str
+    description: str
+
+@model_router.post("/definitions/seed")
+async def seed_definitions(request: Optional[DefinitionsSeedRequest] = None):
+    """
+    Seed the metadata.definitions table from all tables in bronze, silver, and gold schemas.
+    
+    This endpoint:
+    - Creates the definitions table if it doesn't exist
+    - Iterates through all tables in the specified schemas
+    - Queries system.columns for each table
+    - Inserts column metadata (schema_name, table_name, column_name, column_type, column_precision)
+    - Leaves column_description blank for user editing
+    
+    Args:
+        request: Optional request with schema_names list (defaults to ['bronze', 'silver', 'gold'])
+        
+    Returns:
+        Dict[str, Any]: Seeding results including table and column counts
+    """
+    try:
+        logger.info("Seeding definitions table...")
+        
+        # Initialize definitions manager
+        definitions_manager = DefinitionsManager()
+        
+        # Get schema names from request or use defaults
+        schema_names = request.schema_names if request and request.schema_names else None
+        
+        # Seed definitions
+        result = definitions_manager.seed_definitions_from_schemas(schema_names)
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error seeding definitions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.post("/definitions/generate-gold-descriptions")
+async def generate_gold_descriptions():
+    """
+    Intelligently generate column descriptions for gold schema tables.
+    
+    This endpoint:
+    - Finds all gold schema definitions without descriptions
+    - Uses ERD, dimensional model, and discovery metadata to generate intelligent descriptions
+    - Updates column descriptions based on:
+      - Column name patterns (amount, date, key, etc.)
+      - Table types (fact, dimension, K-Table)
+      - ERD relationships and classifications
+      - Data types and precision
+    
+    Returns:
+        Dict[str, Any]: Generation results including count of descriptions generated
+    """
+    try:
+        logger.info("Generating gold schema column descriptions...")
+        
+        # Initialize definitions manager
+        definitions_manager = DefinitionsManager()
+        
+        # Generate descriptions
+        result = definitions_manager.generate_gold_descriptions()
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error generating gold descriptions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.put("/definitions/description")
+async def update_column_description(request: DefinitionUpdateRequest):
+    """
+    Update the column_description for a specific column.
+    
+    Args:
+        request: DefinitionUpdateRequest containing schema_name, table_name, column_name, and description
+        
+    Returns:
+        Dict[str, Any]: Update results
+    """
+    try:
+        logger.info(f"Updating description for {request.schema_name}.{request.table_name}.{request.column_name}")
+        
+        # Initialize definitions manager
+        definitions_manager = DefinitionsManager()
+        
+        # Update description
+        result = definitions_manager.update_column_description(
+            schema_name=request.schema_name,
+            table_name=request.table_name,
+            column_name=request.column_name,
+            description=request.description
+        )
+        
+        if result['status'] == 'error':
+            raise HTTPException(status_code=404, detail=result['message'])
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating column description: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.get("/definitions")
+async def get_definitions(
+    schema_name: Optional[str] = None,
+    table_name: Optional[str] = None,
+    limit: int = 1000
+):
+    """
+    Get definitions with optional filters.
+    
+    Args:
+        schema_name: Optional schema filter (bronze, silver, gold)
+        table_name: Optional table filter
+        limit: Maximum number of records (default: 1000)
+        
+    Returns:
+        Dict[str, Any]: Definitions data
+    """
+    try:
+        logger.info(f"Getting definitions (schema: {schema_name}, table: {table_name})")
+        
+        # Initialize definitions manager
+        definitions_manager = DefinitionsManager()
+        
+        # Get definitions
+        result = definitions_manager.get_definitions(
+            schema_name=schema_name,
+            table_name=table_name,
+            limit=limit
+        )
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting definitions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
