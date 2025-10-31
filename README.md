@@ -500,13 +500,27 @@ cp config.json.example config.json
 ```
 
 4. **Start the FastAPI backend**
-```bash
-# Windows
-start_server.bat
 
-# Or manually
+**Windows:**
+```bash
+start_server.bat
+```
+
+**Linux/Ubuntu:**
+```bash
+# Make scripts executable (first time only)
+chmod +x start_server.sh stop_server.sh
+
+# Start server
+./start_server.sh
+```
+
+**Manual (any OS):**
+```bash
 uvicorn kimball.api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+**Note:** The Linux scripts automatically activate the virtual environment at `/opt/tomcat/.venv` if available. If you're using a different virtual environment path, edit `start_server.sh` and update the `VENV_PATH` variable.
 
 5. **Test the API endpoints** using curl commands or Postman
 
