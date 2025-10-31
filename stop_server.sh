@@ -1,6 +1,35 @@
 #!/bin/bash
 
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PID_FILE="$SCRIPT_DIR/logs/kimball_server.pid"
+
 echo "Stopping KIMBALL v2.0 FastAPI Server..."
+echo ""
+
+# Method 0: Try to stop using PID file first (cleanest method)
+if [ -f "$PID_FILE" ]; then
+    SERVER_PID=$(cat "$PID_FILE")
+    if ps -p "$SERVER_PID" > /dev/null 2>&1; then
+        echo "Found server process from PID file: $SERVER_PID"
+        echo "Stopping process $SERVER_PID..."
+        kill "$SERVER_PID" 2>/dev/null
+        # Wait a bit for graceful shutdown
+        sleep 2
+        # Force kill if still running
+        if ps -p "$SERVER_PID" > /dev/null 2>&1; then
+            echo "Force stopping process $SERVER_PID..."
+            kill -9 "$SERVER_PID" 2>/dev/null
+        fi
+        # Remove PID file
+        rm -f "$PID_FILE"
+        echo "Server stopped using PID file"
+    else
+        echo "PID file exists but process not found. Cleaning up PID file..."
+        rm -f "$PID_FILE"
+    fi
+fi
+
 echo ""
 
 # Method 1: Find and kill processes on port 8000
