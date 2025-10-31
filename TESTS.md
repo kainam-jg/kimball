@@ -1203,6 +1203,73 @@ curl -X POST "http://localhost:8000/api/v1/model/dimensional-model/generate-tran
 
 # 4. Execute all stage3 transformations to create gold schema tables
 curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/stage/stage3"
+
+# 5. (Optional) Analyze gold schema ERD for join relationships
+curl -X POST "http://localhost:8000/api/v1/model/erd/analyze" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "schema_name": "gold",
+    "min_confidence": 0.7
+  }'
+
+# 6. Generate stage4 K-Table transformations (creates denormalized tables)
+curl -X POST "http://localhost:8000/api/v1/model/k-table/generate-transformations"
+
+# 7. Execute all stage4 transformations to create K-Tables
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/stage/stage4"
+```
+
+#### **Generate Stage4 K-Table Transformations**
+```bash
+# Generate K-Table (One Big Table) transformations for gold schema
+curl -X POST "http://localhost:8000/api/v1/model/k-table/generate-transformations"
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Generated 1 stage4 K-Table transformations using new framework",
+  "transformations_created": 1,
+  "transformations": [
+    {
+      "transformation_id": 1,
+      "transformation_name": "daily_sales_k",
+      "k_table_name": "daily_sales_k",
+      "fact_table": "daily_sales_fact",
+      "related_dimensions": ["geography_dim", "calendar_dim", "product_dim"],
+      "statements_created": 4
+    }
+  ]
+}
+```
+
+**Note**: Stage4 K-Table transformations:
+- Automatically analyzes gold schema ERD to determine proper join relationships
+- Stores ERD metadata for gold schema (preserving silver schema ERD data)
+- Creates K-Table with `_k` suffix (e.g., `daily_sales_fact` → `daily_sales_k`)
+- Includes ALL fact columns (measures) from the fact table
+- Includes ALL dimension columns from all related dimension tables
+- Dimension columns are prefixed with dimension name (e.g., `geography_dim_region_name`)
+- Uses ERD relationship map for accurate join keys (most reliable)
+- Falls back to dimension_keys matching if ERD relationships not found
+- Each transformation contains 4 SQL statements:
+  1. `DROP TABLE IF EXISTS gold.{fact_name}_k`
+  2. `CREATE TABLE gold.{fact_name}_k ...` (all fact + dimension columns)
+  3. `INSERT INTO gold.{fact_name}_k SELECT fact.*, dim1.*, dim2.*, ... FROM fact LEFT JOIN dim1 LEFT JOIN dim2 ...`
+  4. `OPTIMIZE TABLE gold.{fact_name}_k FINAL`
+- Transformations are stored in `metadata.transformation4` using JSON-based framework
+
+#### **Execute Stage4 Transformations**
+```bash
+# Execute all stage4 K-Table transformations in parallel (default)
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/stage/stage4"
+
+# Execute all stage4 transformations sequentially
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/execute/stage/stage4?parallel=false"
+
+# Execute specific stage4 transformation
+curl -X POST "http://localhost:8000/api/v1/transform/transformations/daily_sales_k/execute?stage=stage4"
 ```
 
 **Note**: If you update hierarchies or recommendations, you may need to:
@@ -1743,6 +1810,12 @@ curl -X POST "http://localhost:8000/api/v1/transform/transformations/non_existen
 - ✅ **Cross-Stage Search**: GET/DELETE endpoints can search across all stages or target specific stage for better performance
 
 ### **Model Phase Enhancements**
+- ✅ **Schema-Agnostic ERD Analysis**: ERD analyzer now works with any schema (silver, gold, etc.)
+- ✅ **Gold Schema ERD Support**: Analyzes gold schema tables to determine proper join relationships
+- ✅ **Multi-Schema ERD Storage**: Preserves ERD metadata across schemas (silver and gold data coexist)
+- ✅ **Stage4 K-Table Generator**: Creates denormalized K-Tables with `_k` suffix combining fact and dimension tables
+- ✅ **ERD-Based Join Logic**: Uses data-driven ERD analysis to determine accurate join keys for K-Tables
+- ✅ **Automatic ERD Analysis**: Gold schema ERD is automatically analyzed during K-Table generation
 - ✅ **Calendar Dimension Generator**: Generate comprehensive time dimensions for silver schema
 - ✅ **Holiday Integration**: US holidays with working day calculations
 - ✅ **Multi-Level Time Attributes**: Year, quarter, month, week, day hierarchies
@@ -1765,6 +1838,9 @@ curl -X POST "http://localhost:8000/api/v1/transform/transformations/non_existen
 - ✅ **Stage3 Transformation Generation**: Automatically generates SQL transformations to create gold schema tables from silver stage1
 - ✅ **Intelligent ORDER BY**: Fact tables ordered by dimension keys, dimension tables by root/leaf columns
 - ✅ **Complete SQL Generation**: DROP, CREATE, INSERT, and OPTIMIZE statements for each gold table
+- ✅ **Stage4 K-Table Generation**: Automatically generates denormalized "One Big Table" combining fact and dimension tables
+- ✅ **ERD-Based Join Logic**: Uses data-driven ERD analysis to determine accurate join keys for K-Tables
+- ✅ **Automatic ERD Analysis**: Gold schema ERD is automatically analyzed during K-Table generation (preserves silver ERD data)
 
 ### **Bug Fixes**
 - Fixed `postgresql` vs `postgres` source type validation

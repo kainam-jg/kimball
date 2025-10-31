@@ -755,7 +755,7 @@ async def generate_stage3_transformations():
     """
     Generate stage3 transformation SQL for gold schema tables.
     
-    Creates transformations in metadata.transformation1 for each recommendation:
+    Creates transformations in metadata.transformation3 for each recommendation:
     - DROP TABLE IF EXISTS gold.final_name
     - CREATE TABLE gold.final_name with proper schema
     - INSERT INTO gold.final_name SELECT ... FROM silver.source_table
@@ -777,6 +777,38 @@ async def generate_stage3_transformations():
         
     except Exception as e:
         logger.error(f"Error generating stage3 transformations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@model_router.post("/k-table/generate-transformations")
+async def generate_stage4_k_table_transformations():
+    """
+    Generate stage4 transformation SQL for K-Table (One Big Table) denormalized structure.
+    
+    Creates a single denormalized table that combines fact tables with all related dimensions.
+    The K-Table uses the fact table name but with _k suffix instead of _fact.
+    
+    Creates transformations in metadata.transformation4 for each fact table:
+    - DROP TABLE IF EXISTS gold.{fact_name}_k
+    - CREATE TABLE gold.{fact_name}_k with all fact + dimension columns
+    - INSERT INTO gold.{fact_name}_k SELECT fact.*, dim1.*, dim2.*, ... FROM fact JOIN dim1 JOIN dim2 ...
+    - OPTIMIZE TABLE gold.{fact_name}_k FINAL
+    
+    Returns:
+        Dict[str, Any]: Transformation generation results
+    """
+    try:
+        logger.info("Generating stage4 K-Table transformations...")
+        
+        # Initialize recommender
+        recommender = DimensionalModelRecommender()
+        
+        # Generate stage4 K-Table transformations
+        result = recommender.generate_stage4_k_table_transformations()
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error generating stage4 K-Table transformations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @model_router.get("/erd/relationships")

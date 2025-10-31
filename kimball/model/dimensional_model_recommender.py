@@ -16,6 +16,10 @@ import logging
 from datetime import datetime
 
 from ..core.database import DatabaseManager
+from ..core.sql_transformation import SQLTransformation, TransformationStage
+from ..core.sql_parser import SQLParser
+from ..core.transformation_storage import TransformationStorage
+from .erd_analyzer import ERDAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -647,7 +651,7 @@ class DimensionalModelRecommender:
     
     def generate_stage3_transformations(self) -> Dict[str, Any]:
         """
-        Generate stage3 transformation SQL for gold schema tables.
+        Generate stage3 transformation SQL for gold schema tables using the new SQL framework.
         
         For each recommendation, creates transformations with:
         1. DROP TABLE IF EXISTS gold.final_name
@@ -655,11 +659,14 @@ class DimensionalModelRecommender:
         3. INSERT INTO gold.final_name SELECT ... FROM silver.source_table
         4. OPTIMIZE TABLE gold.final_name FINAL
         
+        Uses the new JSON-based SQL storage framework (SQLTransformation, SQLParser, TransformationStorage)
+        similar to how generate-stage1-from-discovery works.
+        
         Returns:
             Dict containing transformation generation results
         """
         try:
-            logger.info("Generating stage3 transformations for gold schema...")
+            logger.info("Generating stage3 transformations for gold schema using new framework...")
             
             # Get all recommendations
             query = """
@@ -683,40 +690,18 @@ class DimensionalModelRecommender:
                     "transformations_created": 0
                 }
             
-            transformations_created = []
-            transformation_counter = 1
-            
-            # Ensure transformation3 table exists
-            create_table_sql = """
-            CREATE TABLE IF NOT EXISTS metadata.transformation3 (
-                transformation_stage String,
-                transformation_id UInt32,
-                transformation_name String,
-                transformation_schema_name String,
-                dependencies Array(String),
-                execution_frequency String,
-                source_schema String,
-                source_table String,
-                target_schema String,
-                target_table String,
-                execution_sequence UInt32,
-                sql_statement String,
-                statement_type String,
-                created_at DateTime DEFAULT now(),
-                updated_at DateTime DEFAULT now(),
-                version UInt64 DEFAULT 1
-            ) ENGINE = ReplacingMergeTree(version)
-            ORDER BY (transformation_id, execution_sequence)
-            """
-            self.db_manager.execute_command(create_table_sql)
-            
             # Get next transformation_id from transformation3 table
             max_id_query = """
-            SELECT max(transformation_id) as max_id
+            SELECT COALESCE(MAX(transformation_id), 0) as max_id
             FROM metadata.transformation3
             """
             max_result = self.db_manager.execute_query_dict(max_id_query)
-            next_transformation_id = (max_result[0]['max_id'] + 1) if max_result and max_result[0].get('max_id') else 1
+            next_transformation_id = (max_result[0]['max_id'] if max_result and max_result[0].get('max_id') else 0) + 1
+            
+            # Initialize storage for new framework
+            storage = TransformationStorage(self.db_manager)
+            
+            transformations_created = []
             
             for rec in recommendations:
                 recommended_name = rec['recommended_name']
@@ -763,19 +748,17 @@ class DimensionalModelRecommender:
                     logger.warning(f"Could not get column types from source table {source_table}: {e}")
                     # Continue with types from column_details
                 
-                # Generate transformation name
-                transformation_name = f"{final_name}_transformation"
+                # Generate transformation name (use final_name as the transformation name)
+                transformation_name = final_name
                 
                 statements = []
-                new_version = int(datetime.now().timestamp() * 1000000)
                 
                 # Statement 1: DROP TABLE IF EXISTS
                 drop_sql = f"DROP TABLE IF EXISTS gold.{final_name};"
                 statements.append({
                     'execution_sequence': 1,
                     'sql_statement': drop_sql,
-                    'statement_type': 'DROP',
-                    'description': f'Drop existing {final_name} table'
+                    'statement_type': 'DROP'
                 })
                 
                 # Statement 2: CREATE TABLE
@@ -807,34 +790,28 @@ class DimensionalModelRecommender:
                         # Use first column as fallback
                         order_by = f"ORDER BY ({columns[0]})" if columns else "ORDER BY tuple()"
                 
-                create_sql = f"""
-CREATE TABLE gold.{final_name} (
+                create_sql = f"""CREATE TABLE gold.{final_name} (
     {', '.join(column_defs)}
 ) ENGINE = MergeTree()
-{order_by};
-""".strip()
+{order_by};"""
                 
                 statements.append({
                     'execution_sequence': 2,
                     'sql_statement': create_sql,
-                    'statement_type': 'CREATE',
-                    'description': f'Create {final_name} table in gold schema'
+                    'statement_type': 'CREATE'
                 })
                 
                 # Statement 3: INSERT INTO ... SELECT
                 # Map columns from silver to gold (assuming same names for now)
                 select_cols = [col if isinstance(col, str) else col.get('column_name', str(col)) for col in columns]
-                insert_sql = f"""
-INSERT INTO gold.{final_name} ({', '.join(select_cols)})
+                insert_sql = f"""INSERT INTO gold.{final_name} ({', '.join(select_cols)})
 SELECT {', '.join(select_cols)}
-FROM silver.{source_table};
-""".strip()
+FROM silver.{source_table};"""
                 
                 statements.append({
                     'execution_sequence': 3,
                     'sql_statement': insert_sql,
-                    'statement_type': 'INSERT',
-                    'description': f'Populate {final_name} from {source_table}'
+                    'statement_type': 'INSERT'
                 })
                 
                 # Statement 4: OPTIMIZE TABLE
@@ -842,67 +819,64 @@ FROM silver.{source_table};
                 statements.append({
                     'execution_sequence': 4,
                     'sql_statement': optimize_sql,
-                    'statement_type': 'OPTIMIZE',
-                    'description': f'Optimize {final_name} table'
+                    'statement_type': 'OPTIMIZE'
                 })
                 
-                # Insert statements into transformation1
+                # Convert each statement to the new framework and store
                 for statement in statements:
-                    escaped_sql = statement['sql_statement'].replace("'", "''")
-                    
-                    insert_transformation_sql = f"""
-                    INSERT INTO metadata.transformation3 (
-                        transformation_stage,
-                        transformation_id,
-                        transformation_name,
-                        transformation_schema_name,
-                        dependencies,
-                        execution_frequency,
-                        source_schema,
-                        source_table,
-                        target_schema,
-                        target_table,
-                        execution_sequence,
-                        sql_statement,
-                        statement_type,
-                        version
-                    ) VALUES (
-                        'stage3',
-                        {next_transformation_id},
-                        '{transformation_name}',
-                        'metadata',
-                        '[]',
-                        'daily',
-                        'silver',
-                        '{source_table}',
-                        'gold',
-                        '{final_name}',
-                        {statement['execution_sequence']},
-                        '{escaped_sql}',
-                        '{statement['statement_type']}',
-                        {new_version}
+                    # Create transformation data using the new framework
+                    transformation_data = SQLParser.create_transformation_data(
+                        sql=statement['sql_statement'],
+                        stage=TransformationStage.STAGE3,
+                        transformation_id=next_transformation_id,
+                        transformation_name=transformation_name,
+                        execution_sequence=statement['execution_sequence'],
+                        custom_metadata={
+                            'source_table': f'silver.{source_table}',
+                            'target_table': f'gold.{final_name}',
+                            'generated_from': 'dimensional_model_recommendations',
+                            'transformation_schema_name': 'metadata',
+                            'dependencies': [],
+                            'execution_frequency': 'daily',
+                            'table_type': table_type,
+                            'recommended_name': recommended_name,
+                            'source_schema': 'silver',
+                            'target_schema': 'gold',
+                            'column_mappings': [
+                                {
+                                    'source': col_name,
+                                    'target': col_name,
+                                    'type': column_types.get(col_name, 'String')
+                                }
+                                for col_name in columns
+                            ]
+                        }
                     )
-                    """
                     
-                    self.db_manager.execute_command(insert_transformation_sql)
-                    new_version += 1  # Increment version for each statement
+                    # Create transformation object
+                    transformation = SQLTransformation(transformation_data)
+                    
+                    # Store using the new framework
+                    success = storage.store_transformation(transformation)
+                    if not success:
+                        logger.error(f"Failed to store transformation {next_transformation_id}")
                 
                 transformations_created.append({
-                    'transformation_name': transformation_name,
                     'transformation_id': next_transformation_id,
+                    'transformation_name': transformation_name,
                     'final_name': final_name,
                     'source_table': source_table,
                     'table_type': table_type,
-                    'statements': len(statements)
+                    'statements_created': len(statements)
                 })
                 
                 next_transformation_id += 1
             
-            logger.info(f"Generated {len(transformations_created)} stage3 transformations")
+            logger.info(f"Generated {len(transformations_created)} stage3 transformations using new framework")
             
             return {
                 "status": "success",
-                "message": f"Generated {len(transformations_created)} stage3 transformations",
+                "message": f"Generated {len(transformations_created)} stage3 transformations using new framework",
                 "transformations_created": len(transformations_created),
                 "transformations": transformations_created
             }
@@ -912,6 +886,464 @@ FROM silver.{source_table};
             return {
                 "status": "error",
                 "message": f"Failed to generate stage3 transformations: {str(e)}",
+                "transformations_created": 0
+            }
+    
+    def generate_stage4_k_table_transformations(self) -> Dict[str, Any]:
+        """
+        Generate stage4 transformation SQL for K-Table (One Big Table) denormalized structure.
+        
+        Creates a single denormalized table that combines fact tables with all related dimensions.
+        The K-Table uses the fact table name but with _k suffix instead of _fact.
+        
+        For each fact table, creates transformations with:
+        1. DROP TABLE IF EXISTS gold.{fact_name}_k
+        2. CREATE TABLE gold.{fact_name}_k with all fact + dimension columns
+        3. INSERT INTO gold.{fact_name}_k SELECT fact.*, dim1.*, dim2.*, ... FROM fact JOIN dim1 JOIN dim2 ...
+        4. OPTIMIZE TABLE gold.{fact_name}_k FINAL
+        
+        Uses the new JSON-based SQL storage framework (SQLTransformation, SQLParser, TransformationStorage)
+        similar to generate_stage3_transformations.
+        
+        Returns:
+            Dict containing transformation generation results
+        """
+        try:
+            logger.info("Generating stage4 K-Table transformations using new framework...")
+            
+            # First, analyze gold schema ERD to get proper join relationships
+            logger.info("Analyzing gold schema ERD relationships...")
+            erd_analyzer = ERDAnalyzer()
+            
+            # Generate ERD metadata for gold schema (excluding _k tables)
+            gold_erd_metadata = erd_analyzer.generate_erd_metadata(
+                confidence_threshold=0.7,
+                schema_name='gold',
+                table_pattern=None,  # Include all tables
+                exclude_pattern='%_k'  # Exclude K-Table denormalized tables
+            )
+            
+            # Store gold ERD metadata (preserving silver schema data)
+            if gold_erd_metadata['total_tables'] > 0:
+                store_success = erd_analyzer.store_erd_metadata(gold_erd_metadata, preserve_existing=True)
+                logger.info(f"Stored ERD metadata for {gold_erd_metadata['total_tables']} gold schema tables")
+            
+            # Build relationship lookup map from ERD
+            erd_relationships_map = {}  # Map of (fact_table, dimension_table) -> (fact_col, dim_col)
+            for rel in gold_erd_metadata.get('relationships', []):
+                table1 = rel.get('table1')
+                table2 = rel.get('table2')
+                col1 = rel.get('column1')
+                col2 = rel.get('column2')
+                confidence = rel.get('join_confidence', 0.0)
+                
+                # Store relationship in both directions
+                if confidence > 0.7:  # Only use high-confidence relationships
+                    erd_relationships_map[(table1, table2)] = (col1, col2)
+                    erd_relationships_map[(table2, table1)] = (col2, col1)
+                    logger.info(f"ERD Relationship: {table1}.{col1} -> {table2}.{col2} (confidence: {confidence:.2f})")
+            
+            # Get all fact tables and their dimension keys
+            fact_query = """
+            SELECT 
+                recommended_name,
+                final_name,
+                source_table,
+                columns,
+                column_details,
+                dimension_keys
+            FROM metadata.dimensional_model
+            WHERE table_type = 'fact'
+            ORDER BY recommended_name
+            """
+            
+            fact_tables = self.db_manager.execute_query_dict(fact_query)
+            
+            if not fact_tables:
+                return {
+                    "status": "error",
+                    "message": "No fact tables found. Generate dimensional model recommendations first.",
+                    "transformations_created": 0
+                }
+            
+            # Get all dimension tables for lookups
+            dim_query = """
+            SELECT 
+                recommended_name,
+                final_name,
+                source_table,
+                columns,
+                column_details,
+                root_column
+            FROM metadata.dimensional_model
+            WHERE table_type = 'dimension'
+            ORDER BY recommended_name
+            """
+            
+            dimension_tables = self.db_manager.execute_query_dict(dim_query)
+            # Create lookup maps
+            dim_by_key = {}  # Map dimension key column name to dimension table
+            dim_by_name = {dim['final_name']: dim for dim in dimension_tables}
+            
+            # Build mapping of dimension key columns to dimension tables
+            # This assumes dimension keys in fact tables match the primary key column name in dimensions
+            for dim in dimension_tables:
+                root_col = dim.get('root_column', '')
+                if root_col:
+                    dim_by_key[root_col] = dim
+                # Also check if final_name suggests a key column
+                # e.g., geography_dim might have geography_key or geography_id
+                dim_name_base = dim['final_name'].replace('_dim', '')
+                possible_keys = [
+                    f"{dim_name_base}_key",
+                    f"{dim_name_base}_id",
+                    dim_name_base,
+                    root_col
+                ]
+                for key in possible_keys:
+                    if key and key not in dim_by_key:
+                        dim_by_key[key] = dim
+            
+            # Get next transformation_id from transformation4 table
+            max_id_query = """
+            SELECT COALESCE(MAX(transformation_id), 0) as max_id
+            FROM metadata.transformation4
+            """
+            max_id_result = self.db_manager.execute_query_dict(max_id_query)
+            next_transformation_id = (max_id_result[0]['max_id'] if max_id_result and max_id_result[0].get('max_id') else 0) + 1
+            
+            # Initialize storage for new framework
+            storage = TransformationStorage(self.db_manager)
+            
+            transformations_created = []
+            
+            for fact_rec in fact_tables:
+                fact_final_name = fact_rec.get('final_name') or fact_rec['recommended_name']
+                
+                # Skip if final_name not set or same as recommended_name
+                if not fact_final_name or fact_final_name == fact_rec['recommended_name']:
+                    logger.warning(f"Skipping {fact_rec['recommended_name']} - final_name not set or same as recommended_name")
+                    continue
+                
+                # Generate K-Table name (replace _fact with _k)
+                k_table_name = fact_final_name.replace('_fact', '_k')
+                if not k_table_name.endswith('_k'):
+                    k_table_name = f"{k_table_name}_k"
+                
+                # Get ALL columns directly from gold schema fact table
+                try:
+                    fact_cols_query = f"""
+                    SELECT 
+                        name as column_name,
+                        type as data_type
+                    FROM system.columns
+                    WHERE database = 'gold'
+                        AND table = '{fact_final_name}'
+                    ORDER BY position
+                    """
+                    fact_cols_result = self.db_manager.execute_query_dict(fact_cols_query)
+                    if not fact_cols_result:
+                        logger.warning(f"Could not find columns in gold fact table {fact_final_name}")
+                        continue
+                    
+                    # Get all fact columns and types
+                    fact_column_types = {col['column_name']: col['data_type'] for col in fact_cols_result}
+                    fact_cols_to_include = [col['column_name'] for col in fact_cols_result]
+                    
+                    logger.info(f"Found {len(fact_cols_to_include)} columns in fact table {fact_final_name}")
+                    
+                except Exception as e:
+                    logger.error(f"Could not get columns from gold fact table {fact_final_name}: {e}")
+                    continue
+                
+                # Get dimension_keys from fact_rec for join matching
+                dimension_keys = fact_rec.get('dimension_keys', [])
+                
+                # Find related dimension tables using ERD relationships map first
+                related_dimensions = []
+                
+                # First, try to find dimensions via ERD relationships map
+                for dim in dimension_tables:
+                    dim_final_name = dim.get('final_name') or dim['recommended_name']
+                    # Check if there's an ERD relationship between fact and this dimension
+                    if (fact_final_name, dim_final_name) in erd_relationships_map:
+                        if dim not in related_dimensions:
+                            related_dimensions.append(dim)
+                            logger.info(f"Found dimension {dim_final_name} via ERD relationship map")
+                    # Also check reverse direction
+                    elif (dim_final_name, fact_final_name) in erd_relationships_map:
+                        if dim not in related_dimensions:
+                            related_dimensions.append(dim)
+                            logger.info(f"Found dimension {dim_final_name} via ERD relationship map (reverse)")
+                
+                # If no ERD matches, use dimension_keys matching
+                if not related_dimensions:
+                    for dim_key in dimension_keys:
+                        if dim_key in dim_by_key:
+                            dim = dim_by_key[dim_key]
+                            if dim not in related_dimensions:
+                                related_dimensions.append(dim)
+                                logger.info(f"Found dimension {dim.get('final_name')} via dimension_key {dim_key}")
+                
+                # Still no matches? Try to find all dimension tables (might be a star schema)
+                if not related_dimensions:
+                    logger.warning(f"No related dimensions found via ERD or keys for {fact_final_name}, trying all dimensions")
+                    # Try all dimensions - they might join via common keys
+                    related_dimensions = dimension_tables.copy()
+                
+                if not related_dimensions:
+                    logger.warning(f"No dimensions available for fact table {fact_final_name}")
+                    continue
+                
+                logger.info(f"Found {len(related_dimensions)} related dimensions for fact table {fact_final_name}")
+                
+                # Add dimension columns - get ALL columns directly from gold schema
+                dim_columns = []  # List of (dim_name, col_name) tuples
+                dim_column_types = {}
+                join_clauses = []
+                
+                for dim in related_dimensions:
+                    dim_final_name = dim.get('final_name') or dim['recommended_name']
+                    
+                    # Get ALL columns directly from gold schema dimension table
+                    try:
+                        dim_cols_query = f"""
+                        SELECT 
+                            name as column_name,
+                            type as data_type
+                        FROM system.columns
+                        WHERE database = 'gold'
+                            AND table = '{dim_final_name}'
+                        ORDER BY position
+                        """
+                        dim_cols_result = self.db_manager.execute_query_dict(dim_cols_query)
+                        if not dim_cols_result:
+                            logger.warning(f"Could not find columns in gold dimension table {dim_final_name}")
+                            continue
+                        
+                        # Store all dimension columns and types
+                        for col in dim_cols_result:
+                            col_name = col['column_name']
+                            full_col_name = f"{dim_final_name}.{col_name}"
+                            dim_column_types[full_col_name] = col['data_type']
+                            dim_columns.append((dim_final_name, col_name))
+                        
+                        logger.info(f"Found {len(dim_cols_result)} columns in dimension table {dim_final_name}")
+                        
+                    except Exception as e:
+                        logger.warning(f"Could not get columns from gold dimension table {dim_final_name}: {e}")
+                        continue
+                    
+                    # Find the join key using ERD relationships map first
+                    join_key = None
+                    dim_pk = None
+                    
+                    # Try ERD relationship map first (most reliable)
+                    if (fact_final_name, dim_final_name) in erd_relationships_map:
+                        fact_col, dim_col = erd_relationships_map[(fact_final_name, dim_final_name)]
+                        join_key = fact_col
+                        dim_pk = dim_col
+                        logger.info(f"Using ERD relationship: fact.{join_key} = {dim_final_name}.{dim_pk}")
+                    elif (dim_final_name, fact_final_name) in erd_relationships_map:
+                        dim_col, fact_col = erd_relationships_map[(dim_final_name, fact_final_name)]
+                        join_key = fact_col
+                        dim_pk = dim_col
+                        logger.info(f"Using ERD relationship (reverse): fact.{join_key} = {dim_final_name}.{dim_pk}")
+                    else:
+                        # Fallback: get the dimension's primary key (root_column or first column)
+                        dim_root = dim.get('root_column', '')
+                        
+                        # Get actual primary key from dimension table structure
+                        if dim_cols_result:
+                            # Try to find root_column in actual columns
+                            for col in dim_cols_result:
+                                if col['column_name'] == dim_root:
+                                    dim_pk = col['column_name']
+                                    break
+                            # Fallback to first column
+                            if not dim_pk:
+                                dim_pk = dim_cols_result[0]['column_name']
+                        
+                        if not dim_pk:
+                            logger.warning(f"Could not determine primary key for dimension {dim_final_name}")
+                            continue
+                        
+                        # Now find matching dimension key in fact table
+                        # Try to match by name (e.g., geography_key matches geography_dim's primary key)
+                        dim_name_base = dim_final_name.replace('_dim', '').replace('_key', '').replace('_id', '')
+                        for fact_col in fact_cols_to_include:
+                            fact_col_lower = fact_col.lower()
+                            if (fact_col == dim_pk or 
+                                fact_col == dim_root or
+                                fact_col_lower == f"{dim_name_base}_key" or
+                                fact_col_lower == f"{dim_name_base}_id" or
+                                fact_col_lower.startswith(dim_name_base)):
+                                join_key = fact_col
+                                break
+                        
+                        # If no name match, try dimension_keys from metadata
+                        if not join_key:
+                            for dim_key in dimension_keys:
+                                if dim_key == dim_pk or dim_key == dim_root:
+                                    join_key = dim_key
+                                    break
+                        
+                        # Final fallback: use first dimension key
+                        if not join_key and dimension_keys:
+                            join_key = dimension_keys[0]
+                    
+                    if join_key and dim_pk:
+                        join_clauses.append(
+                            f"LEFT JOIN gold.{dim_final_name} AS {dim_final_name} "
+                            f"ON fact.{join_key} = {dim_final_name}.{dim_pk}"
+                        )
+                        logger.info(f"JOIN clause: fact.{join_key} = {dim_final_name}.{dim_pk}")
+                    else:
+                        logger.warning(f"Could not determine join key for dimension {dim_final_name} - skipping")
+                        continue
+                
+                # Build all column definitions for CREATE TABLE
+                # Include ALL fact columns + ALL dimension columns
+                all_column_defs = []
+                k_table_column_names = []  # Column names for INSERT target
+                select_columns = []  # SELECT column expressions
+                
+                # Add ALL fact columns first
+                for col_name in fact_cols_to_include:
+                    data_type = fact_column_types.get(col_name, 'String')
+                    all_column_defs.append(f"{col_name} {data_type}")
+                    k_table_column_names.append(col_name)
+                    select_columns.append(f"fact.{col_name}")
+                
+                # Add ALL dimension columns (prefixed to avoid naming conflicts)
+                for dim_name, col_name in dim_columns:
+                    full_col_name = f"{dim_name}_{col_name}"
+                    data_type = dim_column_types.get(f"{dim_name}.{col_name}", 'String')
+                    all_column_defs.append(f"{full_col_name} {data_type}")
+                    k_table_column_names.append(full_col_name)
+                    select_columns.append(f"{dim_name}.{col_name} AS {full_col_name}")
+                
+                logger.info(f"K-Table will have {len(all_column_defs)} columns: {len(fact_cols_to_include)} fact + {len(dim_columns)} dimension")
+                
+                if not all_column_defs:
+                    logger.error(f"No columns to include in K-Table {k_table_name}")
+                    continue
+                
+                # Generate transformation name
+                transformation_name = k_table_name
+                
+                statements = []
+                
+                # Statement 1: DROP TABLE IF EXISTS
+                drop_sql = f"DROP TABLE IF EXISTS gold.{k_table_name};"
+                statements.append({
+                    'execution_sequence': 1,
+                    'sql_statement': drop_sql,
+                    'statement_type': 'DROP'
+                })
+                
+                # Statement 2: CREATE TABLE
+                # Order by first fact column
+                order_by_col = fact_cols_to_include[0] if fact_cols_to_include else k_table_column_names[0]
+                create_sql = f"""CREATE TABLE gold.{k_table_name} (
+    {', '.join(all_column_defs)}
+) ENGINE = MergeTree()
+ORDER BY ({order_by_col});"""
+                
+                statements.append({
+                    'execution_sequence': 2,
+                    'sql_statement': create_sql,
+                    'statement_type': 'CREATE'
+                })
+                
+                # Statement 3: INSERT INTO ... SELECT with JOINs
+                # Build JOIN clauses
+                joins_sql = ' '.join(join_clauses) if join_clauses else ''
+                
+                # Build INSERT statement with explicit column list
+                insert_sql = f"""INSERT INTO gold.{k_table_name} ({', '.join(k_table_column_names)})
+SELECT {', '.join(select_columns)}
+FROM gold.{fact_final_name} AS fact
+{joins_sql};"""
+                
+                statements.append({
+                    'execution_sequence': 3,
+                    'sql_statement': insert_sql,
+                    'statement_type': 'INSERT'
+                })
+                
+                # Statement 4: OPTIMIZE TABLE
+                optimize_sql = f"OPTIMIZE TABLE gold.{k_table_name} FINAL;"
+                statements.append({
+                    'execution_sequence': 4,
+                    'sql_statement': optimize_sql,
+                    'statement_type': 'OPTIMIZE'
+                })
+                
+                # Convert each statement to the new framework and store
+                for statement in statements:
+                    # Create transformation data using the new framework
+                    transformation_data = SQLParser.create_transformation_data(
+                        sql=statement['sql_statement'],
+                        stage=TransformationStage.STAGE4,
+                        transformation_id=next_transformation_id,
+                        transformation_name=transformation_name,
+                        execution_sequence=statement['execution_sequence'],
+                        custom_metadata={
+                            'source_table': f'gold.{fact_final_name}',
+                            'target_table': f'gold.{k_table_name}',
+                            'generated_from': 'k_table_generator',
+                            'transformation_schema_name': 'metadata',
+                            'dependencies': [f'gold.{fact_final_name}'] + [f"gold.{dim.get('final_name', dim['recommended_name'])}" for dim in related_dimensions],
+                            'execution_frequency': 'daily',
+                            'table_type': 'k_table',
+                            'fact_table': fact_final_name,
+                            'related_dimensions': [dim.get('final_name', dim['recommended_name']) for dim in related_dimensions],
+                            'source_schema': 'gold',
+                            'target_schema': 'gold',
+                            'column_mappings': {
+                                'fact_columns': fact_cols_to_include,
+                                'dimension_columns': [f"{dim_name}_{col_name}" for dim_name, col_name in dim_columns],
+                                'total_columns': len(k_table_column_names),
+                                'fact_column_count': len(fact_cols_to_include),
+                                'dimension_column_count': len(dim_columns)
+                            }
+                        }
+                    )
+                    
+                    # Create transformation object
+                    transformation = SQLTransformation(transformation_data)
+                    
+                    # Store using the new framework
+                    success = storage.store_transformation(transformation)
+                    if not success:
+                        logger.error(f"Failed to store transformation {next_transformation_id}")
+                
+                transformations_created.append({
+                    'transformation_id': next_transformation_id,
+                    'transformation_name': transformation_name,
+                    'k_table_name': k_table_name,
+                    'fact_table': fact_final_name,
+                    'related_dimensions': [dim.get('final_name', dim['recommended_name']) for dim in related_dimensions],
+                    'statements_created': len(statements)
+                })
+                
+                next_transformation_id += 1
+            
+            logger.info(f"Generated {len(transformations_created)} stage4 K-Table transformations using new framework")
+            
+            return {
+                "status": "success",
+                "message": f"Generated {len(transformations_created)} stage4 K-Table transformations using new framework",
+                "transformations_created": len(transformations_created),
+                "transformations": transformations_created
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating stage4 K-Table transformations: {e}")
+            return {
+                "status": "error",
+                "message": f"Failed to generate stage4 K-Table transformations: {str(e)}",
                 "transformations_created": 0
             }
 

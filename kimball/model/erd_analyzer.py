@@ -52,31 +52,52 @@ class ERDAnalyzer:
         Returns:
             List[str]: List of Stage 1 table names
         """
-        try:
-            query = """
-            SELECT name 
-            FROM system.tables 
-            WHERE database = 'silver' 
-            AND name LIKE '%_stage1'
-            ORDER BY name
-            """
-            
-            results = self.db_manager.execute_query_dict(query)
-            self.stage1_tables = [row['name'] for row in results] if results else []
-            
-            logger.info(f"Discovered {len(self.stage1_tables)} Stage 1 tables")
-            return self.stage1_tables
-            
-        except Exception as e:
-            logger.error(f"Error discovering Stage 1 tables: {e}")
-            return []
+        return self.discover_tables_for_schema('silver', table_pattern='%_stage1')
     
-    def analyze_table_metadata(self, table_name: str) -> Dict[str, Any]:
+    def discover_tables_for_schema(self, schema_name: str, table_pattern: Optional[str] = None, exclude_pattern: Optional[str] = None) -> List[str]:
         """
-        Analyze metadata for a single Stage 1 table.
+        Discover tables in a given schema, optionally filtering by pattern.
         
         Args:
-            table_name (str): Name of the Stage 1 table
+            schema_name (str): Schema/database name (e.g., 'silver', 'gold')
+            table_pattern (Optional[str]): SQL LIKE pattern for table names (e.g., '%_stage1', '%_fact')
+            exclude_pattern (Optional[str]): SQL LIKE pattern to exclude (e.g., '%_k')
+        
+        Returns:
+            List[str]: List of table names
+        """
+        try:
+            query = f"""
+            SELECT name 
+            FROM system.tables 
+            WHERE database = '{schema_name}'
+            """
+            
+            if table_pattern:
+                query += f" AND name LIKE '{table_pattern}'"
+            
+            if exclude_pattern:
+                query += f" AND name NOT LIKE '{exclude_pattern}'"
+            
+            query += " ORDER BY name"
+            
+            results = self.db_manager.execute_query_dict(query)
+            tables = [row['name'] for row in results] if results else []
+            
+            logger.info(f"Discovered {len(tables)} tables in schema {schema_name}")
+            return tables
+            
+        except Exception as e:
+            logger.error(f"Error discovering tables in schema {schema_name}: {e}")
+            return []
+    
+    def analyze_table_metadata(self, table_name: str, schema_name: str = 'silver') -> Dict[str, Any]:
+        """
+        Analyze metadata for a single table in the specified schema.
+        
+        Args:
+            table_name (str): Name of the table
+            schema_name (str): Schema/database name (default: 'silver')
             
         Returns:
             Dict[str, Any]: Table metadata including columns and relationships
@@ -92,7 +113,7 @@ class ERDAnalyzer:
                 is_in_sorting_key,
                 is_in_primary_key
             FROM system.columns 
-            WHERE database = 'silver' 
+            WHERE database = '{schema_name}' 
             AND table = '{table_name}'
             ORDER BY position
             """
@@ -100,14 +121,14 @@ class ERDAnalyzer:
             columns = self.db_manager.execute_query_dict(structure_query)
             
             # Get row count
-            count_query = f"SELECT COUNT(*) as row_count FROM silver.{table_name}"
+            count_query = f"SELECT COUNT(*) as row_count FROM {schema_name}.{table_name}"
             count_result = self.db_manager.execute_query_dict(count_query)
             row_count = count_result[0]['row_count'] if count_result else 0
             
             # Analyze each column
             column_analysis = []
             for col in columns:
-                col_analysis = self._analyze_column(table_name, col)
+                col_analysis = self._analyze_column(table_name, col, schema_name)
                 column_analysis.append(col_analysis)
             
             # Determine table type (fact vs dimension)
@@ -126,16 +147,17 @@ class ERDAnalyzer:
             return metadata
             
         except Exception as e:
-            logger.error(f"Error analyzing table {table_name}: {e}")
+            logger.error(f"Error analyzing table {table_name} in schema {schema_name}: {e}")
             return {}
     
-    def _analyze_column(self, table_name: str, column_info: Dict[str, Any]) -> Dict[str, Any]:
+    def _analyze_column(self, table_name: str, column_info: Dict[str, Any], schema_name: str = 'silver') -> Dict[str, Any]:
         """
         Analyze a single column for ERD purposes.
         
         Args:
             table_name (str): Name of the table
             column_info (Dict[str, Any]): Column information from system.columns
+            schema_name (str): Schema/database name (default: 'silver')
             
         Returns:
             Dict[str, Any]: Column analysis results
@@ -147,10 +169,10 @@ class ERDAnalyzer:
             # Get cardinality and null count
             cardinality_query = f"""
             SELECT 
-                COUNT(DISTINCT {column_name}) as cardinality,
-                COUNT(*) - COUNT({column_name}) as null_count,
+                COUNT(DISTINCT `{column_name}`) as cardinality,
+                COUNT(*) - COUNT(`{column_name}`) as null_count,
                 COUNT(*) as total_count
-            FROM silver.{table_name}
+            FROM {schema_name}.{table_name}
             """
             
             stats = self.db_manager.execute_query_dict(cardinality_query)
@@ -166,10 +188,10 @@ class ERDAnalyzer:
             
             # Get sample values
             sample_query = f"""
-            SELECT DISTINCT {column_name} as sample_value
-            FROM silver.{table_name}
-            WHERE {column_name} IS NOT NULL
-            ORDER BY {column_name}
+            SELECT DISTINCT `{column_name}` as sample_value
+            FROM {schema_name}.{table_name}
+            WHERE `{column_name}` IS NOT NULL
+            ORDER BY `{column_name}`
             LIMIT 5
             """
             
@@ -343,7 +365,7 @@ class ERDAnalyzer:
         
         return max(0.0, min(1.0, score))
     
-    def find_join_relationships(self, confidence_threshold: float = 0.8) -> List[Dict[str, Any]]:
+    def find_join_relationships(self, confidence_threshold: float = 0.8, schema_name: str = 'silver') -> List[Dict[str, Any]]:
         """
         Find potential join relationships between Stage 1 tables based on data overlap.
         
@@ -376,7 +398,7 @@ class ERDAnalyzer:
                 
                 # Get distinct values for this column
                 try:
-                    distinct_query = f"SELECT DISTINCT `{col_name}` as value FROM silver.{table_name} WHERE `{col_name}` IS NOT NULL"
+                    distinct_query = f"SELECT DISTINCT `{col_name}` as value FROM {schema_name}.{table_name} WHERE `{col_name}` IS NOT NULL"
                     result = self.db_manager.execute_query_dict(distinct_query)
                     distinct_values = {str(row['value']) for row in result if row.get('value') is not None}
                     
@@ -582,30 +604,41 @@ class ERDAnalyzer:
         # Otherwise, many-to-many
         return 'many_to_many'
     
-    def generate_erd_metadata(self, confidence_threshold: float = 0.8) -> Dict[str, Any]:
+    def generate_erd_metadata(self, confidence_threshold: float = 0.8, schema_name: str = 'silver', 
+                             table_pattern: Optional[str] = '%_stage1', exclude_pattern: Optional[str] = None) -> Dict[str, Any]:
         """
-        Generate comprehensive ERD metadata for all Stage 1 tables.
+        Generate comprehensive ERD metadata for tables in the specified schema.
         
         Args:
             confidence_threshold (float): Minimum confidence threshold for relationships (default: 0.8)
+            schema_name (str): Schema/database name (default: 'silver')
+            table_pattern (Optional[str]): SQL LIKE pattern for table names (default: '%_stage1' for silver)
+            exclude_pattern (Optional[str]): SQL LIKE pattern to exclude (e.g., '%_k' for gold)
         
         Returns:
             Dict[str, Any]: Complete ERD metadata
         """
-        # Discover and analyze all Stage 1 tables
-        self.discover_stage1_tables()
+        # Discover tables for the schema
+        if schema_name == 'silver':
+            tables = self.discover_stage1_tables()
+        else:
+            tables = self.discover_tables_for_schema(schema_name, table_pattern, exclude_pattern)
         
-        for table_name in self.stage1_tables:
-            self.analyze_table_metadata(table_name)
+        # Reset table metadata for new analysis
+        self.table_metadata = {}
+        
+        # Analyze each table
+        for table_name in tables:
+            self.analyze_table_metadata(table_name, schema_name)
         
         # Find join relationships with confidence threshold
-        relationships = self.find_join_relationships(confidence_threshold=confidence_threshold)
+        relationships = self.find_join_relationships(confidence_threshold=confidence_threshold, schema_name=schema_name)
         
         # Generate ERD metadata
         erd_metadata = {
-            'schema_name': 'silver',
+            'schema_name': schema_name,
             'analysis_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'total_tables': len(self.stage1_tables),
+            'total_tables': len(tables),
             'total_relationships': len(relationships),
             'tables': self.table_metadata,
             'relationships': relationships,
@@ -620,12 +653,13 @@ class ERDAnalyzer:
         
         return erd_metadata
     
-    def store_erd_metadata(self, erd_metadata: Dict[str, Any]) -> bool:
+    def store_erd_metadata(self, erd_metadata: Dict[str, Any], preserve_existing: bool = False) -> bool:
         """
         Store ERD metadata in the metadata.erd table.
         
         Args:
             erd_metadata (Dict[str, Any]): ERD metadata to store
+            preserve_existing (bool): If True, only delete entries for the same schema, preserving other schemas
             
         Returns:
             bool: True if successful
@@ -652,6 +686,17 @@ class ERDAnalyzer:
             """
             
             self.db_manager.execute_query(create_table_sql)
+            
+            schema_name = erd_metadata.get('schema_name', 'silver')
+            
+            # Delete existing entries for this schema only (preserve other schemas)
+            if preserve_existing:
+                delete_sql = f"DELETE FROM metadata.erd WHERE schema_name = '{schema_name}'"
+                try:
+                    self.db_manager.execute_command(delete_sql)
+                    logger.info(f"Deleted existing ERD metadata for schema {schema_name} (preserving other schemas)")
+                except Exception as e:
+                    logger.warning(f"Could not delete existing ERD metadata for schema {schema_name}: {e}")
             
             # Insert ERD metadata
             for table_name, table_metadata in erd_metadata['tables'].items():

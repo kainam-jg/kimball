@@ -55,16 +55,20 @@ KIMBALL follows a four-phase approach:
 - **Monitoring & Logging**: Comprehensive transformation monitoring and audit trails
 
 ### 4. **Model Phase** ✅ **COMPLETE**
-- **ERD Analysis**: Entity Relationship Diagram generation and analysis
+- **ERD Analysis**: Entity Relationship Diagram generation and analysis for silver and gold schemas
+- **Schema-Agnostic ERD**: Analyzes ERD relationships for any schema (silver, gold, etc.)
 - **Hierarchy Discovery**: Dimensional hierarchy analysis with ROOT-to-LEAF progression
 - **Join Relationship Detection**: Automatic discovery of table relationships and foreign keys
 - **Fact vs Dimension Classification**: Intelligent classification of tables and columns
 - **Primary Key Detection**: Automated identification of primary key candidates
 - **Cross-Hierarchy Relationships**: Discovery of relationships between different hierarchies
 - **OLAP-Compliant Hierarchies**: Proper level-based hierarchy structures for dimensional modeling
-- **Metadata Storage**: ClickHouse `metadata.erd` and `metadata.hierarchies` tables
+- **Metadata Storage**: ClickHouse `metadata.erd` and `metadata.hierarchies` tables (preserves data across schemas)
 - **Confidence Scoring**: Relationship confidence calculation for join recommendations
 - **Dimensional Modeling Support**: Foundation for star schema and data warehouse design
+- **Stage 3 Transformation Generation**: Automatically generates SQL to create gold schema dimensional model
+- **Stage 4 K-Table Generation**: Creates denormalized "One Big Table" combining fact and dimension tables
+- **ERD-Based Join Logic**: Uses data-driven ERD analysis to determine proper join keys for K-Table
 - **✏️ Editing Capabilities**: Full CRUD operations for ERD relationships and hierarchies
 - **🎨 Custom Creation**: User-defined relationship and hierarchy creation
 - **🗑️ Deletion Management**: Soft deletion with version control and audit trails
@@ -89,7 +93,13 @@ The Model Phase provides comprehensive ERD and hierarchy analysis for dimensiona
 
 ##### **Metadata Storage**
 - **`metadata.erd`**: Entity relationship metadata with table classifications and join relationships
+  - Supports multiple schemas (silver, gold, etc.) via `schema_name` column
+  - Preserves data across schema analyses (doesn't overwrite other schema data)
+  - Used for determining proper join relationships in K-Table generation
 - **`metadata.hierarchies`**: Dimensional hierarchy metadata with level structures and relationships
+- **`metadata.dimensional_model`**: Dimensional model recommendations with fact and dimension table definitions
+- **`metadata.transformation3`**: Stage 3 transformations for creating gold schema dimensional model
+- **`metadata.transformation4`**: Stage 4 transformations for creating K-Table denormalized tables
 - **Upsert Functionality**: Automatic metadata updates with version control
 - **Query Optimization**: Indexed metadata tables for fast retrieval
 
@@ -114,9 +124,12 @@ The Transform Phase implements a sophisticated ELT (Extract, Load, Transform) ar
 - **Dimension Tables**: Tables with `_dim` suffix (e.g., `dealers_dim`, `vehicles_dim`)
 - **Fact Tables**: Tables with `_fact` suffix (e.g., `sales_fact`)
 - **Star Schema**: Traditional dimensional modeling structure
-- **Stage 3 UDFs**: Transform Silver Stage 2 data into Gold dimensional model
+- **K-Tables**: Denormalized "One Big Table" with `_k` suffix (e.g., `daily_sales_k`)
+- **Stage 3 Transformations**: Transform Silver Stage1 data into Gold dimensional model (fact and dimension tables)
+- **Stage 4 Transformations**: Transform Gold fact and dimension tables into K-Table (denormalized star schema)
 - **Metadata-Driven**: Uses Model Phase ERD and hierarchy analysis for transformation logic
-- **Source/Target Tracking**: New columns in `metadata.transformation1` track source and target schemas/tables
+- **ERD-Based Joins**: Stage 4 uses gold schema ERD analysis to determine proper join relationships
+- **Source/Target Tracking**: Tracks source and target schemas/tables in transformation metadata
 - **Version Control**: Microsecond-precision versioning for upserts
 - **Execution Frequency**: Configurable execution schedules
 
@@ -140,9 +153,29 @@ The Transform Phase implements a sophisticated ELT (Extract, Load, Transform) ar
 - **Tables**: `*_stage2` suffix (e.g., `sales_transactions_stage2`) - these are the "current" tables
 - **CDC Logic**: Drop and recreate approach ensures clean data transfer
 
-###### **Stage 3+: Business Logic and Aggregation (Silver → Gold)**
-- **Purpose**: Apply business rules and create analytical datasets
-- **Process**: TBD (future implementation)
+###### **Stage 3: Dimensional Model Creation (Silver → Gold)**
+- **Purpose**: Create star schema dimensional model (fact and dimension tables) in gold schema
+- **Process**:
+  1. Generate dimensional model recommendations based on ERD and hierarchy analysis
+  2. Create fact tables (`*_fact` suffix) with measures and dimension keys
+  3. Create dimension tables (`*_dim` suffix) with descriptive attributes
+  4. Store transformations in `metadata.transformation3`
+- **Tables**: Fact tables (e.g., `daily_sales_fact`) and dimension tables (e.g., `calendar_dim`, `geography_dim`, `product_dim`)
+
+###### **Stage 4: K-Table Generation (Gold → Gold K-Table)**
+- **Purpose**: Create denormalized "One Big Table" (K-Table) combining fact and dimension tables
+- **Process**:
+  1. Analyze gold schema ERD relationships to determine proper joins
+  2. Create K-Table with `_k` suffix (e.g., `daily_sales_fact` → `daily_sales_k`)
+  3. Include ALL fact columns (measures) and ALL dimension columns
+  4. Build proper JOIN clauses using ERD relationship metadata
+  5. Store transformations in `metadata.transformation4`
+- **Tables**: K-Tables with `_k` suffix (e.g., `daily_sales_k`)
+- **Features**: 
+  - Automatic ERD analysis for gold schema tables
+  - Data-driven join relationship detection
+  - All columns from fact + all columns from dimensions
+  - Dimension columns prefixed with dimension name to avoid conflicts
 
 ##### **CDC (Change Data Capture) Architecture**
 
