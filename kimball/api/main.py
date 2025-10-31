@@ -9,6 +9,7 @@ Current Active Phases:
 - Discover: Metadata analysis and intelligent type inference
 - Transform: ELT orchestration with ClickHouse UDFs
 - Model: ERD generation and dimensional hierarchy analysis
+- Access: Query engine for gold schema dimensional model
 """
 
 from fastapi import FastAPI, HTTPException
@@ -23,6 +24,7 @@ from .discover_routes import discover_router
 from .transform_routes import transform_router
 from .model_routes import model_router
 from .demo_routes import demo_router
+from .access_routes import access_router
 
 # Future phases (commented out for systematic testing)
 # from .build_routes import build_router
@@ -60,6 +62,7 @@ app.include_router(discover_router, tags=["Discover"])
 app.include_router(model_router, tags=["Model"])
 app.include_router(transform_router, tags=["Transform"])
 app.include_router(demo_router, tags=["Demo"])
+app.include_router(access_router, tags=["Access"])
 
 # Future phases (commented out for systematic testing)
 # app.include_router(build_router, tags=["Build"])
@@ -70,7 +73,7 @@ async def root():
     return {
         "message": "KIMBALL API - Kinetic Intelligent Model Builder",
         "version": "2.0.0",
-        "phases": ["Acquire", "Discover", "Model", "Transform", "Demo"],  # Currently active phases
+        "phases": ["Acquire", "Discover", "Model", "Transform", "Demo", "Access"],  # Currently active phases
         "docs": "/docs",
         "redoc": "/redoc"
     }

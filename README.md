@@ -673,14 +673,16 @@ Once the FastAPI backend is running, visit:
 
 #### Model Phase
 - `GET /api/v1/model/status` - Get model status
-- `POST /api/v1/model/erd/analyze` - Analyze ERD relationships
-- `POST /api/v1/model/hierarchies/analyze` - Analyze hierarchies
-- `GET /api/v1/model/erd/metadata` - Get ERD metadata
-- `GET /api/v1/model/hierarchies/metadata` - Get hierarchy metadata
-- `PUT /api/v1/model/erd/edit` - Edit ERD relationships
-- `PUT /api/v1/model/hierarchies/edit` - Edit hierarchies
-- `POST /api/v1/model/hierarchies/create` - Create custom hierarchy
-- `POST /api/v1/model/erd/create` - Create custom ERD relationship
+- `POST /api/v1/model/definitions/seed` - Seed column definitions from schemas
+- `POST /api/v1/model/definitions/generate-gold-descriptions` - Generate intelligent column descriptions
+- `GET /api/v1/model/definitions` - Get column definitions
+- `PUT /api/v1/model/definitions/description` - Update column description
+
+#### Access Phase
+- `GET /api/v1/access/status` - Get access status and available tables
+- `GET /api/v1/access/tables` - List all tables in gold schema
+- `GET /api/v1/access/table/{table_name}/columns` - Get table column information
+- `POST /api/v1/access/query` - Execute SELECT query against gold schema
 
 
 ## 🧪 Testing

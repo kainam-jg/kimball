@@ -1529,6 +1529,168 @@ curl -X PUT "http://localhost:8000/api/v1/model/definitions/description" \
 curl -X GET "http://localhost:8000/api/v1/model/definitions?schema_name=gold"
 ```
 
+### **Access Phase** ✅ **NEW**
+
+The Access Phase provides a query engine interface for accessing the gold schema dimensional model. It allows executing SELECT queries against gold schema tables with validation and security controls.
+
+#### **Get Access Status**
+```bash
+# Get Access Phase status and available tables
+curl -X GET "http://localhost:8000/api/v1/access/status"
+```
+
+**Response:**
+```json
+{
+  "status": "active",
+  "phase": "Access",
+  "description": "Query engine for gold schema dimensional model",
+  "schema": "gold",
+  "total_tables": 5,
+  "tables": [
+    {"table_name": "calendar_dim", "row_count": 366},
+    {"table_name": "daily_sales_fact", "row_count": 3193140},
+    {"table_name": "daily_sales_k", "row_count": 3193140},
+    {"table_name": "geography_dim", "row_count": 95},
+    {"table_name": "product_dim", "row_count": 12}
+  ]
+}
+```
+
+#### **List Gold Schema Tables**
+```bash
+# Get list of all tables in gold schema
+curl -X GET "http://localhost:8000/api/v1/access/tables"
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "schema": "gold",
+  "count": 5,
+  "tables": [
+    {
+      "table_name": "calendar_dim",
+      "row_count": 366,
+      "size_bytes": 123456
+    }
+  ]
+}
+```
+
+#### **Get Table Columns**
+```bash
+# Get column information for a specific table
+curl -X GET "http://localhost:8000/api/v1/access/table/daily_sales_fact/columns"
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "schema": "gold",
+  "table_name": "daily_sales_fact",
+  "column_count": 4,
+  "columns": [
+    {
+      "column_name": "amount_sales",
+      "column_type": "Decimal(15, 2)",
+      "position": 1,
+      "default_kind": "",
+      "is_in_primary_key": false
+    },
+    {
+      "column_name": "sales_date",
+      "column_type": "Date",
+      "position": 2,
+      "default_kind": "",
+      "is_in_primary_key": false
+    }
+  ]
+}
+```
+
+#### **Execute Query**
+```bash
+# Execute a SELECT query against gold schema
+curl -X POST "http://localhost:8000/api/v1/access/query" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "SELECT * FROM gold.daily_sales_fact LIMIT 10"
+  }'
+
+# Execute query with limit override
+curl -X POST "http://localhost:8000/api/v1/access/query" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "SELECT * FROM gold.daily_sales_fact",
+    "limit": 100
+  }'
+
+# Complex query with JOINs
+curl -X POST "http://localhost:8000/api/v1/access/query" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "SELECT f.amount_sales, f.sales_date, c.calendar_year, g.region FROM gold.daily_sales_fact f LEFT JOIN gold.calendar_dim c ON f.sales_date = c.calendar_date LEFT JOIN gold.geography_dim g ON f.dealer_key = g.dealer_key LIMIT 50"
+  }'
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Query executed successfully",
+  "row_count": 10,
+  "columns": ["amount_sales", "sales_date", "dealer_key", "vehicle_key"],
+  "data": [
+    {
+      "amount_sales": 1500.50,
+      "sales_date": "2024-01-15",
+      "dealer_key": "DLR001",
+      "vehicle_key": "VH001"
+    }
+  ],
+  "execution_time_ms": 45.23,
+  "tables_accessed": ["daily_sales_fact"]
+}
+```
+
+**Security Features:**
+- Only SELECT queries are allowed (no DML/DDL operations)
+- Queries are validated to ensure they only access gold schema tables
+- Non-gold schema references are rejected
+- Dangerous keywords (DROP, DELETE, TRUNCATE, etc.) are blocked
+- Tables are verified to exist in gold schema before execution
+
+**Error Responses:**
+```json
+// Invalid schema access
+{
+  "detail": "Query references non-gold schema table: silver.some_table. Only 'gold' schema is allowed."
+}
+
+// Dangerous operation
+{
+  "detail": "Only SELECT queries are allowed. DML/DDL operations are not permitted."
+}
+
+// Invalid table
+{
+  "detail": "Query references tables not in gold schema: invalid_table. Available tables: calendar_dim, daily_sales_fact, ..."
+}
+```
+
+### **Access Phase Testing Tips**
+
+1. **Check Status First**: Always check `/api/v1/access/status` to see available tables
+2. **Explore Schema**: Use `/api/v1/access/tables` and `/api/v1/access/table/{table_name}/columns` to understand the gold schema structure
+3. **Start Simple**: Begin with simple SELECT queries before attempting complex JOINs
+4. **Use LIMIT**: Always use LIMIT clauses to control result size, especially for large fact tables
+5. **Test Validation**: Try invalid queries (non-SELECT, non-gold schema) to verify security controls
+6. **Review Execution Times**: Check `execution_time_ms` to monitor query performance
+7. **Check Error Messages**: Review error responses for helpful guidance on query issues
+
 ### **Model Phase Testing Tips**
 
 1. **Start with Status**: Always check `/api/v1/model/status` first to ensure the phase is active
