@@ -148,6 +148,9 @@ pipeline_*.json
 # Documentation files
 KIMBALL.txt
 
+# Git configuration reminders (local only)
+.git-remotes.md
+
 # Test files and data
 tests/
 
