@@ -18,6 +18,7 @@ from ..core.config import Config
 from ..core.log_pruner import LogPruner
 from ..core.database import DatabaseManager
 from ..core.table_initializer import TableInitializer
+from ..acquire.metadata_source_manager import MetadataSourceManager
 
 # Initialize router
 admin_router = APIRouter(prefix="/api/v1/admin", tags=["Administration"])
@@ -28,6 +29,7 @@ log_pruner = LogPruner()
 config = Config()
 db_manager = DatabaseManager()
 table_initializer = TableInitializer()
+metadata_source_manager = MetadataSourceManager()
 
 # Pydantic models
 class LogPruningRequest(BaseModel):
@@ -55,6 +57,22 @@ class ClickHouseConfigRequest(BaseModel):
 class ConfigUpdateRequest(BaseModel):
     """Request model for configuration updates."""
     value: Any
+
+class DataSourceConfigRequest(BaseModel):
+    """Request model for creating a new data source."""
+    name: str
+    type: str  # postgres, s3, api
+    enabled: bool = True
+    description: Optional[str] = ""
+    config: Dict[str, Any]
+
+class DataSourceUpdateRequest(BaseModel):
+    """Request model for updating an existing data source."""
+    name: Optional[str] = None
+    type: Optional[str] = None
+    enabled: Optional[bool] = None
+    description: Optional[str] = None
+    config: Optional[Dict[str, Any]] = None
 
 # Administration Status
 @admin_router.get("/status")
@@ -939,5 +957,192 @@ async def update_config_value(path: str, request: ConfigUpdateRequest):
         
     except Exception as e:
         logger.error(f"Error updating config value at {path}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Data Source Management Endpoints (Administration)
+@admin_router.get("/datasources")
+async def list_data_sources():
+    """List all configured data sources from metadata.acquire."""
+    try:
+        logger.log_api_call("/admin/datasources", "GET", phase="Administration")
+        
+        # Get sources from metadata.acquire (don't decrypt sensitive fields in list)
+        sources = metadata_source_manager.list_sources(enabled_only=False, decrypt=False)
+        
+        return {
+            "status": "success",
+            "data_sources": {source['source_name']: {
+                "source_id": source['source_id'],
+                "type": source['source_type'],
+                "enabled": source['enabled'],
+                "description": source['description'],
+                "config": source['connection_config']  # Encrypted or masked
+            } for source in sources},
+            "count": len(sources),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error listing data sources: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@admin_router.get("/datasources/{source_id}")
+async def get_data_source(source_id: str):
+    """Get a specific data source configuration from metadata.acquire."""
+    try:
+        logger.log_api_call(f"/admin/datasources/{source_id}", "GET", phase="Administration")
+        
+        # Get source from metadata.acquire (decrypt for API response)
+        source = metadata_source_manager.get_source(source_id, decrypt=True)
+        
+        if not source:
+            raise HTTPException(status_code=404, detail=f"Data source '{source_id}' not found")
+        
+        return {
+            "status": "success",
+            "source_id": source['source_id'],
+            "source_name": source['source_name'],
+            "source_type": source['source_type'],
+            "connection_config": source['connection_config'],  # Decrypted
+            "enabled": source['enabled'],
+            "description": source['description'],
+            "created_at": source.get('created_at'),
+            "updated_at": source.get('updated_at'),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting data source {source_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@admin_router.post("/datasources")
+async def create_data_source(request: DataSourceConfigRequest):
+    """Create a new data source configuration in metadata.acquire."""
+    try:
+        logger.log_api_call("/admin/datasources", "POST", request_data=request.dict(), phase="Administration")
+        
+        # Check if data source already exists (by name)
+        existing = metadata_source_manager.get_source_by_name(request.name, decrypt=False)
+        if existing:
+            raise HTTPException(status_code=400, detail=f"Data source '{request.name}' already exists")
+        
+        # Validate source type
+        valid_types = ["postgres", "postgresql", "s3", "api", "mysql", "clickhouse"]
+        if request.type not in valid_types:
+            raise HTTPException(status_code=400, detail=f"Invalid source type '{request.type}'. Must be one of: {valid_types}")
+        
+        # Create data source in metadata.acquire (encryption handled internally)
+        source = metadata_source_manager.create_source(
+            source_name=request.name,
+            source_type=request.type,
+            connection_config=request.config,
+            enabled=request.enabled,
+            description=request.description or ""
+        )
+        
+        return {
+            "status": "success",
+            "message": f"Data source '{request.name}' created successfully",
+            "source_id": source['source_id'],
+            "source_name": source['source_name'],
+            "source_type": source['source_type'],
+            "enabled": source['enabled'],
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating data source: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@admin_router.put("/datasources/{source_id}")
+async def update_data_source(source_id: str, request: DataSourceUpdateRequest):
+    """Update an existing data source configuration in metadata.acquire."""
+    try:
+        logger.log_api_call(f"/admin/datasources/{source_id}", "PUT", request_data=request.dict(), phase="Administration")
+        
+        # Check if source exists
+        existing = metadata_source_manager.get_source(source_id, decrypt=False)
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Data source '{source_id}' not found")
+        
+        # If renaming, check if new name already exists
+        if request.name is not None and request.name != existing['source_name']:
+            name_exists = metadata_source_manager.get_source_by_name(request.name, decrypt=False)
+            if name_exists:
+                raise HTTPException(status_code=400, detail=f"Data source '{request.name}' already exists")
+        
+        # Validate source type if provided
+        if request.type is not None:
+            valid_types = ["postgres", "postgresql", "s3", "api", "mysql", "clickhouse"]
+            if request.type not in valid_types:
+                raise HTTPException(status_code=400, detail=f"Invalid source type '{request.type}'. Must be one of: {valid_types}")
+        
+        # Update the source
+        success = metadata_source_manager.update_source(
+            source_id=source_id,
+            source_name=request.name,
+            source_type=request.type,
+            connection_config=request.config,
+            enabled=request.enabled,
+            description=request.description
+        )
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update data source")
+        
+        # Get updated source for response
+        updated_source = metadata_source_manager.get_source(source_id, decrypt=True)
+        
+        return {
+            "status": "success",
+            "message": f"Data source '{source_id}' updated successfully",
+            "source_id": updated_source['source_id'],
+            "source_name": updated_source['source_name'],
+            "source_type": updated_source['source_type'],
+            "connection_config": updated_source['connection_config'],
+            "enabled": updated_source['enabled'],
+            "description": updated_source['description'],
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating data source {source_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@admin_router.delete("/datasources/{source_id}")
+async def delete_data_source(source_id: str):
+    """Delete a data source configuration (soft delete by setting enabled=False)."""
+    try:
+        logger.log_api_call(f"/admin/datasources/{source_id}", "DELETE", phase="Administration")
+        
+        # Get source before deletion for response
+        source = metadata_source_manager.get_source(source_id, decrypt=False)
+        if not source:
+            raise HTTPException(status_code=404, detail=f"Data source '{source_id}' not found")
+        
+        # Soft delete (set enabled=False)
+        success = metadata_source_manager.delete_source(source_id)
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to delete data source")
+        
+        return {
+            "status": "success",
+            "message": f"Data source '{source_id}' deleted successfully (disabled)",
+            "deleted_source_id": source_id,
+            "deleted_source_name": source['source_name'],
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting data source {source_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
