@@ -7,6 +7,7 @@ data stored in metadata tables, particularly for connection credentials in metad
 
 import base64
 import os
+import json
 from typing import Optional
 from cryptography.fernet import Fernet
 
@@ -22,7 +23,8 @@ class EncryptionManager:
         
         Args:
             encryption_key: Optional encryption key. If not provided, uses environment
-                          variable KIMBALL_ENCRYPTION_KEY or generates a default key.
+                          variable KIMBALL_ENCRYPTION_KEY, then config.json, or generates
+                          a persistent key stored in config.json.
                           The key should be a base64-encoded Fernet key.
         """
         self.logger = Logger("encryption")
@@ -30,32 +32,73 @@ class EncryptionManager:
         self.cipher = Fernet(self.key)
     
     def _get_or_create_key(self, provided_key: Optional[str]) -> bytes:
-        """Get encryption key from various sources or generate a default."""
+        """
+        Get encryption key from various sources in priority order:
+        1. Provided key (if passed explicitly)
+        2. Environment variable KIMBALL_ENCRYPTION_KEY (production use)
+        3. config.json encryption_key (persistent across restarts)
+        4. Generate new key and store in config.json
+        """
+        # Priority 1: Use provided key if explicitly passed
         if provided_key:
             try:
-                # Use provided key if it's base64-encoded
                 return base64.urlsafe_b64decode(provided_key)
             except Exception as e:
-                self.logger.warning(f"Invalid provided key format, generating new key: {e}")
+                self.logger.warning(f"Invalid provided key format, trying other sources: {e}")
         
-        # Try to get from environment variable
+        # Priority 2: Try environment variable (highest priority for production)
         env_key = os.getenv('KIMBALL_ENCRYPTION_KEY')
         if env_key:
             try:
-                return base64.urlsafe_b64decode(env_key)
+                key_bytes = base64.urlsafe_b64decode(env_key)
+                self.logger.info("Using encryption key from KIMBALL_ENCRYPTION_KEY environment variable")
+                return key_bytes
             except Exception as e:
-                self.logger.warning(f"Invalid environment key format, generating new key: {e}")
+                self.logger.warning(f"Invalid environment key format, trying config.json: {e}")
         
-        # Generate a default key (NOTE: In production, this should be set securely)
-        # For default key, we generate a Fernet key directly
-        # In production, this should be set via KIMBALL_ENCRYPTION_KEY environment variable
+        # Priority 3: Try to get from config.json
+        try:
+            config_file = os.getenv('KIMBALL_CONFIG_FILE', 'config.json')
+            if os.path.exists(config_file):
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+                    if 'encryption_key' in config:
+                        try:
+                            key_bytes = base64.urlsafe_b64decode(config['encryption_key'])
+                            self.logger.info("Using encryption key from config.json")
+                            return key_bytes
+                        except Exception as e:
+                            self.logger.warning(f"Invalid encryption key in config.json, generating new: {e}")
+        except Exception as e:
+            self.logger.warning(f"Error reading config.json for encryption key: {e}")
+        
+        # Priority 4: Generate new key and store in config.json for persistence
         key = Fernet.generate_key()
+        key_base64 = base64.urlsafe_b64encode(key).decode()
         
-        self.logger.warning(
-            "Using generated encryption key. For production, set KIMBALL_ENCRYPTION_KEY "
-            "environment variable with a secure base64-encoded Fernet key. "
-            "Current key will be different on each restart."
-        )
+        try:
+            # Store the key in config.json for persistence
+            config_file = os.getenv('KIMBALL_CONFIG_FILE', 'config.json')
+            config = {}
+            if os.path.exists(config_file):
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+            
+            config['encryption_key'] = key_base64
+            
+            # Write back to config.json
+            with open(config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            self.logger.info(
+                f"Generated and stored persistent encryption key in {config_file}. "
+                "For production, consider using KIMBALL_ENCRYPTION_KEY environment variable."
+            )
+        except Exception as e:
+            self.logger.warning(
+                f"Could not store encryption key in config.json: {e}. "
+                "Key will be different on each restart unless KIMBALL_ENCRYPTION_KEY is set."
+            )
         
         return key
     

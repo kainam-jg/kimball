@@ -1391,16 +1391,6 @@ async def test_data_source_connection(source_id: str):
     try:
         logger.log_api_call(f"/acquire/test/{source_id}", "GET")
         
-        # Get the source configuration
-        config_manager = Config()
-        config = config_manager.get_config()
-        data_sources = config.get("data_sources", {})
-        
-        if source_id not in data_sources:
-            raise HTTPException(status_code=404, detail=f"Data source '{source_id}' not found")
-        
-        source_config = data_sources[source_id]
-        
         # Try metadata-based source first, fallback to legacy config.json
         test_result = False
         source_type = None
@@ -1412,12 +1402,15 @@ async def test_data_source_connection(source_id: str):
             source_type = metadata_source['source_type']
         else:
             # Fallback to legacy config.json approach
-            test_result = source_manager.test_source_connection(source_id)
             config_manager = Config()
             config = config_manager.get_config()
             data_sources = config.get("data_sources", {})
-            if source_id in data_sources:
-                source_type = data_sources[source_id].get("type")
+            
+            if source_id not in data_sources:
+                raise HTTPException(status_code=404, detail=f"Data source '{source_id}' not found")
+            
+            test_result = source_manager.test_source_connection(source_id)
+            source_type = data_sources[source_id].get("type")
         
         return {
             "status": "success" if test_result else "failed",

@@ -808,10 +808,21 @@ pytest --cov=kimball tests/
 
 ## 🔒 Security
 
+- **Credential Encryption**: All sensitive connection parameters (passwords, API keys, secret keys) are encrypted using Fernet symmetric encryption before storage in `metadata.acquire`
+- **Persistent Encryption Keys**: Encryption keys are stored in `config.json` (or via `KIMBALL_ENCRYPTION_KEY` environment variable) to ensure consistent encryption/decryption across server restarts
+- **Secure Storage**: Encrypted credentials are stored in ClickHouse `metadata.acquire` table, with automatic encryption on create/update and decryption on retrieval
 - **API Authentication**: JWT-based authentication (coming soon)
 - **Data Encryption**: TLS encryption for all connections
 - **Access Control**: Role-based access control (RBAC)
 - **Audit Logging**: Comprehensive audit trails
+
+### Encryption Configuration
+
+Encryption keys are managed automatically:
+- **Development**: Key is automatically generated and stored in `config.json` on first use
+- **Production**: Set `KIMBALL_ENCRYPTION_KEY` environment variable with a base64-encoded Fernet key for enhanced security
+
+**Note**: `config.json` is gitignored to prevent committing sensitive encryption keys.
 
 ## 🤝 Contributing
 
