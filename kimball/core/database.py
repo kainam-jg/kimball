@@ -6,11 +6,11 @@ Supports multiple database types with a unified interface.
 """
 
 import json
+import sys
 from typing import Dict, List, Any, Optional, Union, Tuple
 from abc import ABC, abstractmethod
 
 from .config import Config
-from .logger import Logger
 
 # Import existing connection functionality
 import sys
@@ -25,12 +25,34 @@ class DatabaseManager:
     Provides a unified interface for database operations across all phases.
     """
     
-    def __init__(self, config_file: str = "config.json"):
-        """Initialize the database manager."""
-        self.config = Config(config_file)
-        self.logger = Logger("database_manager")
-        self.connections = {}
+    def __init__(self, config_file: str = "config.json", logger: Optional[Any] = None, skip_logger_init: bool = False):
+        """Initialize the database manager.
         
+        Args:
+            config_file: Path to config file
+            logger: Optional Logger instance (to avoid circular dependency)
+            skip_logger_init: If True, don't create logger (prevents recursion during table initialization)
+        """
+        self.config = Config(config_file)
+        # Lazy import to avoid circular dependency
+        if skip_logger_init:
+            # Don't create logger at all - will use print statements
+            self.logger = None
+        elif logger is None:
+            from .logger import Logger
+            # Pass self to prevent recursion (Logger will use this instance)
+            self.logger = Logger("database_manager", db_manager=self)
+        else:
+            self.logger = logger
+        self.connections = {}
+    
+    def _log(self, level: str, message: str):
+        """Helper method to log or print based on logger availability."""
+        if self.logger:
+            getattr(self.logger, level)(message)
+        else:
+            print(f"[{level.upper()}] {message}", file=sys.stderr if level == 'error' else sys.stdout)
+    
     def get_connection(self, connection_type: str = "clickhouse") -> Any:
         """
         Get a database connection.
@@ -61,7 +83,7 @@ class DatabaseManager:
                 raise ValueError(f"Unsupported connection type: {connection_type}")
                 
         except Exception as e:
-            self.logger.error(f"Error getting connection: {str(e)}")
+            self._log('error', f"Error getting connection: {str(e)}")
             raise
     
     def test_connection(self, connection_type: str = "clickhouse") -> bool:
@@ -79,13 +101,13 @@ class DatabaseManager:
             if connection_type == "clickhouse":
                 # Test ClickHouse connection
                 result = conn.command("SELECT 1")
-                self.logger.info(f"Connection test successful for {connection_type}")
+                self._log('info', f"Connection test successful for {connection_type}")
                 return True
             else:
-                self.logger.error(f"Unsupported connection type for testing: {connection_type}")
+                self._log('error', f"Unsupported connection type for testing: {connection_type}")
                 return False
         except Exception as e:
-            self.logger.error(f"Connection test error: {str(e)}")
+            self._log('error', f"Connection test error: {str(e)}")
             return False
     
     def execute_query(self, query: str, connection_type: str = "clickhouse") -> Optional[List[Tuple]]:
@@ -114,13 +136,13 @@ class DatabaseManager:
                 else:
                     return []
             else:
-                self.logger.error(f"Unsupported connection type for query: {connection_type}")
+                self._log('error', f"Unsupported connection type for query: {connection_type}")
                 return None
             
-            self.logger.info(f"Query executed successfully: {query[:100]}...")
+            self._log('info', f"Query executed successfully: {query[:100]}...")
             
         except Exception as e:
-            self.logger.error(f"Query execution error: {str(e)}")
+            self._log('error', f"Query execution error: {str(e)}")
             return None
     
     def execute_query_dict(self, query: str, connection_type: str = "clickhouse") -> Optional[List[Dict[str, Any]]]:
@@ -157,13 +179,13 @@ class DatabaseManager:
                 else:
                     return []
             else:
-                self.logger.error(f"Unsupported connection type for query: {connection_type}")
+                self._log('error', f"Unsupported connection type for query: {connection_type}")
                 return None
             
-            self.logger.info(f"Query executed successfully (dict): {query[:100]}...")
+            self._log('info', f"Query executed successfully (dict): {query[:100]}...")
             
         except Exception as e:
-            self.logger.error(f"Query execution error (dict): {str(e)}")
+            self._log('error', f"Query execution error (dict): {str(e)}")
             return None
     
     def get_tables(self, schema: str = "bronze", connection_type: str = "clickhouse") -> Optional[List[str]]:
@@ -184,16 +206,16 @@ class DatabaseManager:
                 result = conn.query("SHOW TABLES")
                 if result.result_rows:
                     tables = [row[0] for row in result.result_rows]
-                    self.logger.info(f"Retrieved {len(tables)} tables from ClickHouse")
+                    self._log('info', f"Retrieved {len(tables)} tables from ClickHouse")
                     return tables
                 else:
                     return []
             else:
-                self.logger.error(f"Unsupported connection type for get_tables: {connection_type}")
+                self._log('error', f"Unsupported connection type for get_tables: {connection_type}")
                 return None
                 
         except Exception as e:
-            self.logger.error(f"Error getting tables: {str(e)}")
+            self._log('error', f"Error getting tables: {str(e)}")
             return None
     
     def get_table_schema(self, table_name: str, connection_type: str = "clickhouse") -> Optional[List[Dict[str, str]]]:
@@ -215,11 +237,11 @@ class DatabaseManager:
             schema = conn.get_table_schema(table_name)
             conn.disconnect()
             
-            self.logger.info(f"Retrieved schema for table {table_name}")
+            self._log('info', f"Retrieved schema for table {table_name}")
             return schema
             
         except Exception as e:
-            self.logger.error(f"Error getting table schema: {str(e)}")
+            self._log('error', f"Error getting table schema: {str(e)}")
             return None
     
     def get_table_info(self, table_name: str, connection_type: str = "clickhouse") -> Optional[Dict[str, Any]]:
@@ -241,11 +263,11 @@ class DatabaseManager:
             table_info = conn.get_table_info(table_name)
             conn.disconnect()
             
-            self.logger.info(f"Retrieved info for table {table_name}")
+            self._log('info', f"Retrieved info for table {table_name}")
             return table_info
             
         except Exception as e:
-            self.logger.error(f"Error getting table info: {str(e)}")
+            self._log('error', f"Error getting table info: {str(e)}")
             return None
     
     def create_table(self, table_name: str, schema: Dict[str, str], connection_type: str = "clickhouse") -> bool:
@@ -268,14 +290,14 @@ class DatabaseManager:
             result = self.execute_query(create_sql, connection_type)
             
             if result is not None:
-                self.logger.info(f"Table {table_name} created successfully")
+                self._log('info', f"Table {table_name} created successfully")
                 return True
             else:
-                self.logger.error(f"Failed to create table {table_name}")
+                self._log('error', f"Failed to create table {table_name}")
                 return False
                 
         except Exception as e:
-            self.logger.error(f"Error creating table: {str(e)}")
+            self._log('error', f"Error creating table: {str(e)}")
             return False
     
     def drop_table(self, table_name: str, connection_type: str = "clickhouse") -> bool:
@@ -294,14 +316,14 @@ class DatabaseManager:
             result = self.execute_query(drop_sql, connection_type)
             
             if result is not None:
-                self.logger.info(f"Table {table_name} dropped successfully")
+                self._log('info', f"Table {table_name} dropped successfully")
                 return True
             else:
-                self.logger.error(f"Failed to drop table {table_name}")
+                self._log('error', f"Failed to drop table {table_name}")
                 return False
                 
         except Exception as e:
-            self.logger.error(f"Error dropping table: {str(e)}")
+            self._log('error', f"Error dropping table: {str(e)}")
             return False
     
     def execute_command(self, command: str, connection_type: str = "clickhouse") -> bool:
@@ -320,14 +342,14 @@ class DatabaseManager:
             if connection_type == "clickhouse":
                 # Execute ClickHouse command (for DDL operations)
                 conn.command(command)
-                self.logger.info(f"Command executed successfully: {command[:100]}...")
+                self._log('info', f"Command executed successfully: {command[:100]}...")
                 return True
             else:
-                self.logger.error(f"Unsupported connection type for command: {connection_type}")
+                self._log('error', f"Unsupported connection type for command: {connection_type}")
                 return False
                 
         except Exception as e:
-            self.logger.error(f"Command execution error: {str(e)}")
+            self._log('error', f"Command execution error: {str(e)}")
             return False
 
     def close_all_connections(self):
@@ -336,9 +358,9 @@ class DatabaseManager:
             for conn_type, conn in self.connections.items():
                 if hasattr(conn, 'disconnect'):
                     conn.disconnect()
-                    self.logger.info(f"Closed {conn_type} connection")
+                    self._log('info', f"Closed {conn_type} connection")
             
             self.connections.clear()
             
         except Exception as e:
-            self.logger.error(f"Error closing connections: {str(e)}")
+            self._log('error', f"Error closing connections: {str(e)}")

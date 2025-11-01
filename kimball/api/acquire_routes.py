@@ -26,6 +26,9 @@ import asyncio
 import math
 
 from ..acquire.source_manager import DataSourceManager
+from ..acquire.metadata_source_manager import MetadataSourceManager
+from ..acquire.data_contract_manager import DataContractManager
+from ..acquire.stage0_engine import Stage0Engine
 from ..core.logger import Logger
 from ..core.config import Config
 
@@ -77,12 +80,41 @@ class DatabaseExtractionRequest(BaseModel):
     query: str
     target_table: Optional[str] = None
 
+class DataContractCreateRequest(BaseModel):
+    """Request model for creating a new Data Contract."""
+    transformation_name: str
+    source_id: str
+    acquisition_logic: str
+    acquisition_type: str  # sql, mql, rest, file
+    target_table: str
+    execution_frequency: str = "daily"  # daily, hourly, weekly, etc.
+    execution_sequence: int = 0
+    statement_type: str = "INSERT"
+    dependencies: Optional[List[str]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class DataContractUpdateRequest(BaseModel):
+    """Request model for updating an existing Data Contract."""
+    transformation_name: Optional[str] = None
+    source_id: Optional[str] = None
+    acquisition_logic: Optional[str] = None
+    acquisition_type: Optional[str] = None
+    target_table: Optional[str] = None
+    execution_frequency: Optional[str] = None
+    execution_sequence: Optional[int] = None
+    statement_type: Optional[str] = None
+    dependencies: Optional[List[str]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
 # Initialize router
 acquire_router = APIRouter(prefix="/api/v1/acquire", tags=["Acquire"])
 logger = Logger("acquire_api")
 
-# Initialize data source manager
-source_manager = DataSourceManager()
+# Initialize data source managers
+source_manager = DataSourceManager()  # Legacy config.json-based (for backward compatibility)
+metadata_source_manager = MetadataSourceManager()  # New metadata.acquire-based
+data_contract_manager = DataContractManager()  # Data Contract management
+stage0_engine = Stage0Engine()  # Stage0 transformation engine
 
 # ONLY ACTIVE ENDPOINT - Status
 @acquire_router.get("/status")
@@ -113,21 +145,26 @@ async def get_acquire_status():
         logger.error(f"Error getting acquire status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Data Source Management Endpoints
+# Data Source Management Endpoints (Metadata-based)
 @acquire_router.get("/datasources")
 async def list_data_sources():
-    """List all configured data sources."""
+    """List all configured data sources from metadata.acquire."""
     try:
         logger.log_api_call("/acquire/datasources", "GET")
         
-        config_manager = Config()
-        config = config_manager.get_config()
-        data_sources = config.get("data_sources", {})
+        # Get sources from metadata.acquire (don't decrypt sensitive fields in list)
+        sources = metadata_source_manager.list_sources(enabled_only=False, decrypt=False)
         
         return {
             "status": "success",
-            "data_sources": data_sources,
-            "count": len(data_sources),
+            "data_sources": {source['source_name']: {
+                "source_id": source['source_id'],
+                "type": source['source_type'],
+                "enabled": source['enabled'],
+                "description": source['description'],
+                "config": source['connection_config']  # Encrypted or masked
+            } for source in sources},
+            "count": len(sources),
             "timestamp": datetime.now().isoformat()
         }
         
@@ -151,23 +188,26 @@ async def list_data_sources():
 
 @acquire_router.get("/datasources/{source_id}")
 async def get_data_source(source_id: str):
-    """Get a specific data source configuration."""
+    """Get a specific data source configuration from metadata.acquire."""
     try:
         logger.log_api_call(f"/acquire/datasources/{source_id}", "GET")
         
-        config_manager = Config()
-        config = config_manager.get_config()
-        data_sources = config.get("data_sources", {})
+        # Get source from metadata.acquire (decrypt for API response)
+        source = metadata_source_manager.get_source(source_id, decrypt=True)
         
-        if source_id not in data_sources:
+        if not source:
             raise HTTPException(status_code=404, detail=f"Data source '{source_id}' not found")
-        
-        source_config = data_sources[source_id]
         
         return {
             "status": "success",
-            "source_id": source_id,
-            "source_config": source_config,
+            "source_id": source['source_id'],
+            "source_name": source['source_name'],
+            "source_type": source['source_type'],
+            "connection_config": source['connection_config'],  # Decrypted
+            "enabled": source['enabled'],
+            "description": source['description'],
+            "created_at": source.get('created_at'),
+            "updated_at": source.get('updated_at'),
             "timestamp": datetime.now().isoformat()
         }
         
@@ -179,60 +219,52 @@ async def get_data_source(source_id: str):
 
 @acquire_router.put("/datasources/{source_id}")
 async def update_data_source(source_id: str, request: DataSourceUpdateRequest):
-    """Update an existing data source configuration."""
+    """Update an existing data source configuration in metadata.acquire."""
     try:
         logger.log_api_call(f"/acquire/datasources/{source_id}", "PUT", request_data=request.dict())
         
-        config_manager = Config()
-        config = config_manager.get_config()
-        data_sources = config.get("data_sources", {})
-        
-        if source_id not in data_sources:
+        # Check if source exists
+        existing = metadata_source_manager.get_source(source_id, decrypt=False)
+        if not existing:
             raise HTTPException(status_code=404, detail=f"Data source '{source_id}' not found")
         
-        # Get existing configuration
-        existing_config = data_sources[source_id]
-        
-        # Update fields if provided
-        if request.name is not None:
-            # If renaming, check if new name already exists
-            if request.name != source_id and request.name in data_sources:
+        # If renaming, check if new name already exists
+        if request.name is not None and request.name != existing['source_name']:
+            name_exists = metadata_source_manager.get_source_by_name(request.name, decrypt=False)
+            if name_exists:
                 raise HTTPException(status_code=400, detail=f"Data source '{request.name}' already exists")
-            
-            # If renaming, remove old entry and add new one
-            if request.name != source_id:
-                del data_sources[source_id]
-                source_id = request.name
         
+        # Validate source type if provided
         if request.type is not None:
-            # Validate source type
-            valid_types = ["postgres", "s3", "api"]
+            valid_types = ["postgres", "postgresql", "s3", "api", "mysql", "clickhouse"]
             if request.type not in valid_types:
                 raise HTTPException(status_code=400, detail=f"Invalid source type '{request.type}'. Must be one of: {valid_types}")
-            existing_config["type"] = request.type
         
-        if request.enabled is not None:
-            existing_config["enabled"] = request.enabled
+        # Update the source
+        success = metadata_source_manager.update_source(
+            source_id=source_id,
+            source_name=request.name,
+            source_type=request.type,
+            connection_config=request.config,
+            enabled=request.enabled,
+            description=request.description
+        )
         
-        if request.description is not None:
-            existing_config["description"] = request.description
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update data source")
         
-        if request.config is not None:
-            # Merge config updates
-            existing_config.update(request.config)
-        
-        # Update the data source
-        data_sources[source_id] = existing_config
-        config["data_sources"] = data_sources
-        
-        # Save configuration
-        config_manager.save_config(config)
+        # Get updated source for response
+        updated_source = metadata_source_manager.get_source(source_id, decrypt=True)
         
         return {
             "status": "success",
             "message": f"Data source '{source_id}' updated successfully",
-            "source_id": source_id,
-            "source_config": existing_config,
+            "source_id": updated_source['source_id'],
+            "source_name": updated_source['source_name'],
+            "source_type": updated_source['source_type'],
+            "connection_config": updated_source['connection_config'],
+            "enabled": updated_source['enabled'],
+            "description": updated_source['description'],
             "timestamp": datetime.now().isoformat()
         }
         
@@ -244,32 +276,26 @@ async def update_data_source(source_id: str, request: DataSourceUpdateRequest):
 
 @acquire_router.delete("/datasources/{source_id}")
 async def delete_data_source(source_id: str):
-    """Delete a data source configuration."""
+    """Delete a data source configuration (soft delete by setting enabled=False)."""
     try:
         logger.log_api_call(f"/acquire/datasources/{source_id}", "DELETE")
         
-        config_manager = Config()
-        config = config_manager.get_config()
-        data_sources = config.get("data_sources", {})
-        
-        if source_id not in data_sources:
+        # Get source before deletion for response
+        source = metadata_source_manager.get_source(source_id, decrypt=False)
+        if not source:
             raise HTTPException(status_code=404, detail=f"Data source '{source_id}' not found")
         
-        # Get the source config before deletion for response
-        source_config = data_sources[source_id]
+        # Soft delete (set enabled=False)
+        success = metadata_source_manager.delete_source(source_id)
         
-        # Remove the data source
-        del data_sources[source_id]
-        config["data_sources"] = data_sources
-        
-        # Save configuration
-        config_manager.save_config(config)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to delete data source")
         
         return {
             "status": "success",
-            "message": f"Data source '{source_id}' deleted successfully",
+            "message": f"Data source '{source_id}' deleted successfully (disabled)",
             "deleted_source_id": source_id,
-            "deleted_source_config": source_config,
+            "deleted_source_name": source['source_name'],
             "timestamp": datetime.now().isoformat()
         }
         
@@ -281,44 +307,36 @@ async def delete_data_source(source_id: str):
 
 @acquire_router.post("/datasources")
 async def create_data_source(request: DataSourceConfigRequest):
-    """Create a new data source configuration."""
+    """Create a new data source configuration in metadata.acquire."""
     try:
         logger.log_api_call("/acquire/datasources", "POST", request_data=request.dict())
         
-        config_manager = Config()
-        config = config_manager.get_config()
-        data_sources = config.get("data_sources", {})
-        
-        # Check if data source already exists
-        if request.name in data_sources:
+        # Check if data source already exists (by name)
+        existing = metadata_source_manager.get_source_by_name(request.name, decrypt=False)
+        if existing:
             raise HTTPException(status_code=400, detail=f"Data source '{request.name}' already exists")
         
         # Validate source type
-        valid_types = ["postgres", "s3", "api"]
+        valid_types = ["postgres", "postgresql", "s3", "api", "mysql", "clickhouse"]
         if request.type not in valid_types:
             raise HTTPException(status_code=400, detail=f"Invalid source type '{request.type}'. Must be one of: {valid_types}")
         
-        # Create new data source configuration
-        new_source = {
-            "type": request.type,
-            "enabled": request.enabled,
-            "description": request.description,
-            **request.config
-        }
-        
-        # Add to configuration
-        data_sources[request.name] = new_source
-        config["data_sources"] = data_sources
-        
-        # Save configuration
-        config_manager.save_config(config)
+        # Create data source in metadata.acquire (encryption handled internally)
+        source = metadata_source_manager.create_source(
+            source_name=request.name,
+            source_type=request.type,
+            connection_config=request.config,
+            enabled=request.enabled,
+            description=request.description or ""
+        )
         
         return {
             "status": "success",
             "message": f"Data source '{request.name}' created successfully",
-            "source_name": request.name,
-            "source_type": request.type,
-            "enabled": request.enabled,
+            "source_id": source['source_id'],
+            "source_name": source['source_name'],
+            "source_type": source['source_type'],
+            "enabled": source['enabled'],
             "timestamp": datetime.now().isoformat()
         }
         
@@ -1383,13 +1401,28 @@ async def test_data_source_connection(source_id: str):
         
         source_config = data_sources[source_id]
         
-        # Test the connection using DataSourceManager
-        test_result = source_manager.test_source_connection(source_id)
+        # Try metadata-based source first, fallback to legacy config.json
+        test_result = False
+        source_type = None
+        
+        # Try metadata.acquire first
+        metadata_source = metadata_source_manager.get_source(source_id, decrypt=True)
+        if metadata_source:
+            test_result = metadata_source_manager.test_connection(source_id)
+            source_type = metadata_source['source_type']
+        else:
+            # Fallback to legacy config.json approach
+            test_result = source_manager.test_source_connection(source_id)
+            config_manager = Config()
+            config = config_manager.get_config()
+            data_sources = config.get("data_sources", {})
+            if source_id in data_sources:
+                source_type = data_sources[source_id].get("type")
         
         return {
             "status": "success" if test_result else "failed",
             "source_id": source_id,
-            "source_type": source_config.get("type"),
+            "source_type": source_type,
             "connection_test": test_result,
             "message": f"Connection test {'passed' if test_result else 'failed'} for {source_id}",
             "timestamp": datetime.now().isoformat()
@@ -1399,6 +1432,221 @@ async def test_data_source_connection(source_id: str):
         raise
     except Exception as e:
         logger.error(f"Error testing connection to {source_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Data Contract Management Endpoints
+@acquire_router.post("/contracts")
+async def create_data_contract(request: DataContractCreateRequest):
+    """Create a new Data Contract in metadata.transformation0."""
+    try:
+        logger.log_api_call("/acquire/contracts", "POST", request_data=request.dict())
+        
+        # Validate acquisition_type
+        valid_types = ["sql", "mql", "rest", "file"]
+        if request.acquisition_type not in valid_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid acquisition_type '{request.acquisition_type}'. Must be one of: {valid_types}"
+            )
+        
+        # Create Data Contract
+        contract = data_contract_manager.create_contract(
+            transformation_name=request.transformation_name,
+            source_id=request.source_id,
+            acquisition_logic=request.acquisition_logic,
+            acquisition_type=request.acquisition_type,
+            target_table=request.target_table,
+            execution_frequency=request.execution_frequency,
+            execution_sequence=request.execution_sequence,
+            statement_type=request.statement_type,
+            dependencies=request.dependencies,
+            metadata=request.metadata
+        )
+        
+        return {
+            "status": "success",
+            "message": f"Data Contract '{request.transformation_name}' created successfully",
+            "contract": contract,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.error(f"Validation error creating Data Contract: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error creating Data Contract: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@acquire_router.get("/contracts")
+async def list_data_contracts(source_id: Optional[str] = None,
+                              execution_frequency: Optional[str] = None):
+    """List all Data Contracts, optionally filtered by source_id or execution_frequency."""
+    try:
+        logger.log_api_call("/acquire/contracts", "GET")
+        
+        contracts = data_contract_manager.list_contracts(
+            source_id=source_id,
+            execution_frequency=execution_frequency
+        )
+        
+        return {
+            "status": "success",
+            "contracts": contracts,
+            "count": len(contracts),
+            "filters": {
+                "source_id": source_id,
+                "execution_frequency": execution_frequency
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error listing Data Contracts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@acquire_router.get("/contracts/{transformation_id}")
+async def get_data_contract(transformation_id: int):
+    """Get a specific Data Contract by transformation_id."""
+    try:
+        logger.log_api_call(f"/acquire/contracts/{transformation_id}", "GET")
+        
+        contract = data_contract_manager.get_contract(transformation_id)
+        
+        if not contract:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Data Contract with transformation_id {transformation_id} not found"
+            )
+        
+        return {
+            "status": "success",
+            "contract": contract,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting Data Contract {transformation_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@acquire_router.put("/contracts/{transformation_id}")
+async def update_data_contract(transformation_id: int, request: DataContractUpdateRequest):
+    """Update an existing Data Contract."""
+    try:
+        logger.log_api_call(f"/acquire/contracts/{transformation_id}", "PUT", request_data=request.dict())
+        
+        # Validate acquisition_type if provided
+        if request.acquisition_type is not None:
+            valid_types = ["sql", "mql", "rest", "file"]
+            if request.acquisition_type not in valid_types:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid acquisition_type '{request.acquisition_type}'. Must be one of: {valid_types}"
+                )
+        
+        # Update Data Contract
+        success = data_contract_manager.update_contract(
+            transformation_id=transformation_id,
+            transformation_name=request.transformation_name,
+            source_id=request.source_id,
+            acquisition_logic=request.acquisition_logic,
+            acquisition_type=request.acquisition_type,
+            target_table=request.target_table,
+            execution_frequency=request.execution_frequency,
+            execution_sequence=request.execution_sequence,
+            statement_type=request.statement_type,
+            dependencies=request.dependencies,
+            metadata=request.metadata
+        )
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update Data Contract")
+        
+        # Get updated contract for response
+        updated_contract = data_contract_manager.get_contract(transformation_id)
+        
+        return {
+            "status": "success",
+            "message": f"Data Contract {transformation_id} updated successfully",
+            "contract": updated_contract,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.error(f"Validation error updating Data Contract: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error updating Data Contract {transformation_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@acquire_router.delete("/contracts/{transformation_id}")
+async def delete_data_contract(transformation_id: int):
+    """Delete a Data Contract."""
+    try:
+        logger.log_api_call(f"/acquire/contracts/{transformation_id}", "DELETE")
+        
+        # Get contract before deletion for response
+        contract = data_contract_manager.get_contract(transformation_id)
+        if not contract:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Data Contract with transformation_id {transformation_id} not found"
+            )
+        
+        # Delete contract
+        success = data_contract_manager.delete_contract(transformation_id)
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to delete Data Contract")
+        
+        return {
+            "status": "success",
+            "message": f"Data Contract {transformation_id} deleted successfully",
+            "deleted_transformation_id": transformation_id,
+            "deleted_transformation_name": contract['transformation_name'],
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting Data Contract {transformation_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@acquire_router.post("/contracts/{transformation_id}/execute")
+async def execute_data_contract(transformation_id: int):
+    """Execute a Data Contract by transformation_id (direct invocation)."""
+    try:
+        logger.log_api_call(f"/acquire/contracts/{transformation_id}/execute", "POST")
+        
+        # Execute the Data Contract using Stage0 engine
+        result = await stage0_engine.execute_contract(transformation_id)
+        
+        if result.get('status') == 'error':
+            raise HTTPException(
+                status_code=500,
+                detail=result.get('error', 'Unknown error executing Data Contract')
+            )
+        
+        return {
+            "status": "success",
+            "message": f"Data Contract {transformation_id} executed successfully",
+            "execution_result": result,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.error(f"Validation error executing Data Contract: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error executing Data Contract {transformation_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # # Discovery Endpoints

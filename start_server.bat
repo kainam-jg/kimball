@@ -21,4 +21,5 @@ echo Press Ctrl+C to stop the server
 echo.
 
 REM Start server directly (simple approach)
-uvicorn kimball.api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir kimball --log-level info
+REM Redirect stdout and stderr to logs/server.log
+uvicorn kimball.api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir kimball --log-level info > logs\server.log 2>&1

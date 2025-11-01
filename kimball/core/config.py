@@ -48,7 +48,14 @@ class Config:
             },
             "logging": {
                 "level": "INFO",
-                "file": "kimball.log"
+                "file": "kimball.log",
+                "ttl_days": 7  # Time to live for logs in days (logs older than this will be pruned)
+            },
+            "administration": {
+                "log_pruning": {
+                    "enabled": True,
+                    "interval_minutes": 15  # How often to run log pruning service
+                }
             },
             "phases": {
                 "acquire": {

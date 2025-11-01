@@ -151,6 +151,9 @@ KIMBALL.txt
 # Git configuration reminders (local only)
 .git-remotes.md
 
+# Specifications directory (local development docs)
+specs/
+
 # Test files and data
 tests/
 

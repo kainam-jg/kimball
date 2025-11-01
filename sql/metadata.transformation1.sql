@@ -1,6 +1,11 @@
+-- DDL for metadata.transformation1
+-- Extracted from ClickHouse
+-- 
+-- IMPORTANT: This file is auto-generated. Manual edits may be overwritten.
+-- 
+
 CREATE TABLE metadata.transformation1
 (
-
     `transformation_stage` String,
     `transformation_id` UInt32,
     `transformation_name` String,
@@ -12,9 +17,8 @@ CREATE TABLE metadata.transformation1
     `created_at` DateTime DEFAULT now(),
     `updated_at` DateTime DEFAULT now(),
     `version` UInt64 DEFAULT 1,
-    `sql_data` String,
+    `sql_data` String
 )
 ENGINE = ReplacingMergeTree(version)
-ORDER BY (transformation_id,
- execution_sequence)
+ORDER BY (transformation_id, execution_sequence)
 SETTINGS index_granularity = 8192;

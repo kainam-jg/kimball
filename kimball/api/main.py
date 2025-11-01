@@ -25,6 +25,8 @@ from .transform_routes import transform_router
 from .model_routes import model_router
 from .demo_routes import demo_router
 from .access_routes import access_router
+from .pipeline_routes import pipeline_router
+from .admin_routes import admin_router
 
 # Future phases (commented out for systematic testing)
 # from .build_routes import build_router
@@ -36,6 +38,9 @@ from ..core.logger import Logger
 # Initialize configuration and logging
 config = Config()
 logger = Logger()
+
+# Global log pruner instance (for startup/shutdown lifecycle)
+_log_pruner_instance = None
 
 # Create FastAPI application
 app = FastAPI(
@@ -67,6 +72,8 @@ app.include_router(model_router, tags=["Model"])
 app.include_router(transform_router, tags=["Transform"])
 app.include_router(demo_router, tags=["Demo"])
 app.include_router(access_router, tags=["Access"])
+app.include_router(pipeline_router, tags=["Pipeline"])
+app.include_router(admin_router, tags=["Administration"])
 
 # Future phases (commented out for systematic testing)
 # app.include_router(build_router, tags=["Build"])
@@ -77,7 +84,7 @@ async def root():
     return {
         "message": "KIMBALL API - Kinetic Intelligent Model Builder",
         "version": "2.0.0",
-        "phases": ["Acquire", "Discover", "Model", "Transform", "Demo", "Access"],  # Currently active phases
+        "phases": ["Acquire", "Discover", "Model", "Transform", "Demo", "Access", "Pipeline", "Administration"],  # Currently active phases
         "docs": "/docs",
         "redoc": "/redoc"
     }
@@ -86,6 +93,30 @@ async def root():
 async def health_check():
     """Health check endpoint."""
     return {"status": "healthy", "service": "KIMBALL API"}
+
+# Startup event to initialize background services
+@app.on_event("startup")
+async def startup_event():
+    """Initialize background services on startup."""
+    global _log_pruner_instance
+    from ..core.log_pruner import LogPruner
+    
+    # Start log pruning service if enabled
+    _log_pruner_instance = LogPruner()
+    if _log_pruner_instance.is_enabled():
+        _log_pruner_instance.start()
+        logger.info("Log pruning service started on application startup")
+
+# Shutdown event to cleanup background services
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup background services on shutdown."""
+    global _log_pruner_instance
+    
+    # Stop log pruning service
+    if _log_pruner_instance and _log_pruner_instance.running:
+        await _log_pruner_instance.stop_async()
+        logger.info("Log pruning service stopped on application shutdown")
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):

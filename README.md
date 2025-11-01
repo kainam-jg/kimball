@@ -10,7 +10,23 @@ KIMBALL is a complete data warehouse automation platform that takes you from raw
 
 ## 🏗️ Architecture
 
-KIMBALL follows a four-phase approach:
+KIMBALL follows a comprehensive data warehouse automation approach with five main phases plus administration:
+
+### **0. Pipeline Phase** 🔄 **IN PROGRESS**
+- **Time-Based Scheduling**: Automated execution of Data Contracts based on frequency (daily, hourly, weekly, etc.)
+- **Event-Based Triggering**: Manual pipeline execution via API
+- **Pipeline Orchestration**: Coordination of transformations across stages 0-4 (to be built out)
+
+### **Administration Phase** ✅ **COMPLETE**
+- **System Initialization**: Automated setup of all schemas and tables
+- **ClickHouse Logging**: Process-based log storage in ClickHouse tables
+- **Log Pruning Service**: Automatic cleanup of old logs based on TTL
+- **Configuration Management**: ClickHouse and general configuration administration
+- **Setup & Maintenance**: Database and table initialization endpoints
+
+### **Core Phases**
+
+KIMBALL follows a four-phase data processing approach:
 
 ### 1. **Acquire Phase** ✅ **COMPLETE**
 - **Multi-source data connectors** (PostgreSQL ✅, S3 ✅, APIs 🔄, cloud storage 🔄)
@@ -499,12 +515,31 @@ cp config.json.example config.json
 # Edit config.json with your ClickHouse connection details
 ```
 
-4. **Start the FastAPI backend**
+4. **Initialize the system**
+
+Before using KIMBALL, you must initialize all schemas and tables:
+
+```bash
+# Initialize all databases, log tables, and metadata tables
+curl -X POST http://localhost:8000/api/v1/admin/setup/init
+```
+
+This will:
+1. Create logs database in ClickHouse
+2. Create all logging tables in ClickHouse  
+3. Create metadata database in ClickHouse
+4. Create all metadata tables in ClickHouse
+5. Create bronze, silver, gold databases in ClickHouse
+
+**Note:** Initialization follows a strict 5-step process. If any step fails, the entire process stops.
+
+5. **Start the FastAPI backend**
 
 **Windows:**
 ```bash
 start_server.bat
 ```
+Server output will be redirected to `logs/server.log`.
 
 **Linux/Ubuntu:**
 ```bash
@@ -522,7 +557,7 @@ uvicorn kimball.api.main:app --host 0.0.0.0 --port 8000 --reload
 
 **Note:** The Linux scripts automatically activate the virtual environment at `/opt/tomcat/.venv` if available. If you're using a different virtual environment path, edit `start_server.sh` and update the `VENV_PATH` variable.
 
-5. **Test the API endpoints** using curl commands or Postman
+6. **Test the API endpoints** using curl commands or Postman
 
 ## 📁 Project Structure
 
@@ -531,37 +566,48 @@ kimball/
 ├── kimball/                    # Main application package
 │   ├── acquire/               # Acquire phase modules
 │   │   ├── connectors.py     # Data source connectors
-│   │   ├── extractors.py     # Data extraction logic
-│   │   ├── transformers.py   # Data transformation
-│   │   └── loaders.py         # Bronze layer loading
+│   │   ├── loaders.py         # Bronze layer loading
+│   │   ├── metadata_source_manager.py  # Data source CRUD operations
+│   │   ├── data_contract_manager.py    # Data Contract management
+│   │   └── stage0_engine.py   # Stage0 transformation engine
 │   ├── discover/              # Discover phase modules
 │   │   ├── metadata_analyzer.py    # Enhanced metadata analysis
 │   │   ├── catalog_builder.py      # Catalog generation
 │   │   ├── quality_assessor.py     # Data quality assessment
-│   │   └── relationship_finder.py  # Relationship discovery
+│   │   ├── relationship_finder.py  # Relationship discovery
+│   │   └── intelligent_type_inference.py  # Intelligent type inference
 │   ├── model/                 # Model phase modules
 │   │   ├── erd_generator.py       # ERD generation
 │   │   ├── hierarchy_modeler.py    # Hierarchy modeling
 │   │   ├── star_schema_designer.py # Star schema design
-│   │   └── schema_transformer.py   # Schema transformation
-│   ├── build/                 # Build phase modules
-│   │   ├── dag_builder.py         # DAG generation
-│   │   ├── sql_generator.py       # SQL generation
-│   │   ├── pipeline_orchestrator.py # Pipeline orchestration
-│   │   └── monitor.py             # Pipeline monitoring
+│   │   └── definitions_manager.py  # Column definitions management
+│   ├── transform/             # Transform phase modules
+│   │   ├── transform_engine.py     # Transformation execution
+│   │   └── transformation_storage.py  # Transformation metadata storage
 │   ├── api/                   # FastAPI backend
 │   │   ├── main.py               # Main FastAPI app
 │   │   ├── acquire_routes.py     # Acquire API routes
 │   │   ├── discover_routes.py    # Discover API routes
 │   │   ├── model_routes.py       # Model API routes
-│   │   └── build_routes.py       # Build API routes
+│   │   ├── transform_routes.py   # Transform API routes
+│   │   ├── pipeline_routes.py    # Pipeline orchestration routes
+│   │   ├── admin_routes.py       # Administration routes
+│   │   └── access_routes.py      # Access/query routes
 │   └── core/                  # Core infrastructure
 │       ├── database.py           # Database management
 │       ├── config.py             # Configuration management
 │       ├── logger.py             # Logging system
-│       └── utils.py              # Common utilities
+│       ├── clickhouse_logger.py  # ClickHouse log handler
+│       ├── log_pruner.py         # Log pruning service
+│       ├── table_initializer.py  # Table initialization utility
+│       ├── encryption.py         # Encryption utilities
+│       └── scheduler.py          # Scheduling service
 ├── tests/                     # Test suite
-├── docs/                      # Documentation
+├── specs/                     # Functional specifications (gitignored)
+├── sql/                       # DDL files for all tables
+├── scripts/                   # Utility scripts
+│   └── extract_metadata_ddls.py  # Extract DDLs from ClickHouse
+├── logs/                      # Server log output (gitignored)
 ├── config.json               # Configuration file
 ├── requirements.txt           # Python dependencies
 └── README.md                 # This file
@@ -586,6 +632,29 @@ Edit `config.json` to configure your ClickHouse connection:
 
 ### API Configuration
 The FastAPI backend runs on `http://localhost:8000` by default. You can configure this in the `config.json` file.
+
+### Logging Configuration
+Logs are stored in ClickHouse tables. Configure TTL and pruning:
+```json
+{
+    "logging": {
+        "level": "INFO",
+        "ttl_days": 7
+    },
+    "administration": {
+        "log_pruning": {
+            "interval_minutes": 15,
+            "enabled": true
+        }
+    }
+}
+```
+
+### ClickHouse Configuration
+ClickHouse connection settings can be managed via API:
+- `GET /api/v1/admin/config/clickhouse` - View current settings
+- `PUT /api/v1/admin/config/clickhouse` - Update settings
+- `POST /api/v1/admin/config/clickhouse/test` - Test connection
 
 ## 📊 Usage Examples
 
@@ -698,6 +767,25 @@ Once the FastAPI backend is running, visit:
 - `GET /api/v1/access/table/{table_name}/columns` - Get table column information
 - `POST /api/v1/access/query` - Execute SELECT query against gold schema
 
+#### Pipeline Phase
+- `GET /api/v1/pipeline/schedule/time-based` - Get all scheduled Data Contracts
+- `POST /api/v1/pipeline/schedule/time-based/execute/{frequency}` - Execute all contracts for a frequency
+- `POST /api/v1/pipeline/schedule/time-based/register/{transformation_id}` - Register a contract for scheduling
+- `POST /api/v1/pipeline/trigger` - Manually trigger a pipeline execution
+
+#### Administration Phase
+- `POST /api/v1/admin/setup/init` - Initialize all schemas and tables (5-step process)
+- `POST /api/v1/admin/setup/schemas` - Create all standard KIMBALL schemas
+- `POST /api/v1/admin/setup/init/{table_name}` - Initialize a specific table
+- `POST /api/v1/admin/setup/init/{table_name}/force` - Force recreate a table
+- `GET /api/v1/admin/setup/status` - Get initialization status
+- `GET /api/v1/admin/config/clickhouse` - Get ClickHouse configuration
+- `PUT /api/v1/admin/config/clickhouse` - Update ClickHouse configuration
+- `POST /api/v1/admin/config/clickhouse/test` - Test ClickHouse connection
+- `PUT /api/v1/admin/config/{path}` - Update nested configuration value
+- `GET /api/v1/admin/logs` - Query logs (all tables or specific table)
+- `GET /api/v1/admin/logs/stats` - Get log statistics across all tables
+
 
 ## 🧪 Testing
 
@@ -753,18 +841,20 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - ✅ **FastAPI backend** with comprehensive APIs
 - ✅ **Discover phase** with enhanced metadata analysis
 - ✅ **Data quality assessment**
+- ✅ **Transform phase** with multi-stage transformations
+- ✅ **Model phase** with ERD generation and hierarchy modeling
+- ✅ **Administration phase** with system initialization and log management
+- ✅ **ClickHouse-based logging** with process-specific tables
+- ✅ **System initialization** with strict 5-step process
 
-### Phase 2 (Next)
-- 🔄 Model phase with ERD generation
-- 🔄 Hierarchy modeling and validation
-- 🔄 Star schema design
-- 🔄 Interactive model editing
+### Phase 2 (In Progress)
+- 🔄 **Pipeline phase** orchestration (time-based and event-based scheduling)
+- 🔄 Full pipeline management and monitoring
 
 ### Phase 3 (Future)
-- 🔄 Build phase with DAG generation
-- 🔄 SQL transformation code generation
-- 🔄 Pipeline orchestration
-- 🔄 Production deployment
+- 🔄 Advanced pipeline orchestration
+- 🔄 Production deployment automation
+- 🔄 Enhanced monitoring and alerting
 
 ---
 
